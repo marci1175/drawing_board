@@ -1,11 +1,15 @@
-use egui::{Color32, Pos2, Stroke};
+use egui::{util::undoer::Undoer, Color32, Pos2};
 use strum::{EnumCount, IntoStaticStr};
 mod app;
 
+pub type BrushMap = Vec<(Vec<Pos2>, (f32, Color32, BrushType))>;
+
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct Application {
-    lines: Vec<(Vec<Pos2>, (f32, Color32))>,
+    lines: BrushMap,
     paintbrush: PaintBrush,
+
+    undoer: Undoer<BrushMap>
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
@@ -25,9 +29,9 @@ impl PaintBrush {
         (&mut self.brush_width[self.brush_type as usize], &mut self.brush_color[self.brush_type as usize])
     }
 
-    pub fn get_nth_brush(&self, nth: usize) -> (f32, Color32)
+    pub fn get_nth_brush(&self, nth: usize) -> (f32, Color32, BrushType)
     {
-        (self.brush_width[nth], self.brush_color[nth])
+        (self.brush_width[nth], self.brush_color[nth], self.brush_type)
     }
 }
 

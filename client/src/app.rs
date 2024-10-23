@@ -1,5 +1,5 @@
 use crate::{Application, BrushType};
-use egui::{emath, vec2, Color32, Pos2, Rect, Sense, Stroke, Ui};
+use egui::{emath, pos2, util::{self, undoer::{self, Undoer}}, vec2, Color32, Pos2, Rect, Sense, Stroke, Ui};
 
 impl Application {
     pub fn ui_content(&mut self, ui: &mut Ui) -> egui::Response {
@@ -37,12 +37,28 @@ impl Application {
             .filter(|line| line.0.len() >= 2)
             .map(|line| {
                 let points: Vec<Pos2> = line.0.iter().map(|p| to_screen * *p).collect();
-                let (width, color) = line.1;
-
-                egui::Shape::line(points, Stroke::new(width, color))
+                let (width, color, brush_type) = line.1;
+                
+                match brush_type {
+                    BrushType::Graffiti => {
+                        egui::Shape::line(points, Stroke::new(width, color))
+                        // egui::Shape::image(egui::TextureId::Managed(1), Rect::from_points(&points), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color)
+                    },
+                    BrushType::Pencil => {
+                        egui::Shape::Vec(egui::Shape::dashed_line(&points, Stroke::new(width, color), width, width))
+                    },
+                    BrushType::Marker => {
+                        egui::Shape::line(points, Stroke::new(width, color))
+                    },
+                    BrushType::Eraser => {
+                        todo!()
+                    },
+                }
             });
 
         painter.extend(shapes);
+
+        self.undoer.feed_state(1.5, &self.lines);
 
         response
     }
@@ -62,7 +78,7 @@ impl eframe::App for Application {
             ui.allocate_space(vec2(ui.available_width(), 10.));
             
             ui.horizontal(|ui| {
-                let paintbrush_name: &'static str = self.paintbrush.brush_type.clone().into();
+                let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
                 ui.menu_button(paintbrush_name, |ui| {
                     ui.selectable_value(&mut self.paintbrush.brush_type,BrushType::Marker, "Marker");
                     ui.selectable_value(&mut self.paintbrush.brush_type,BrushType::Graffiti, "Graffiti");
@@ -74,7 +90,21 @@ impl eframe::App for Application {
 
                 ui.add(
                     egui::Slider::new(&mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize], 0.0..=100.0).step_by(0.2)
-                )
+                );
+
+                let can_undo = self.undoer.has_undo(&self.lines);
+                let can_redo = self.undoer.has_redo(&self.lines);
+
+                if ui.add_enabled(can_undo, egui::Button::new("Undo")).clicked() {
+                    if let Some(state) = self.undoer.undo(&self.lines) {
+                        self.lines = state.clone();
+                    }
+                }
+                if ui.add_enabled(can_redo, egui::Button::new("Redo")).clicked() {
+                    if let Some(state) = self.undoer.redo(&self.lines) {
+                        self.lines = state.clone();
+                    }
+                }
             });
 
             ui.allocate_space(vec2(ui.available_width(), 10.));
