@@ -8,6 +8,7 @@ fn main() -> eframe::Result<()> {
         Start writing server
         Create the ability to save the boards
         Create the ability to have more boards at once
+        Investigate invalid indexing
     */
 
     let native_options = NativeOptions {

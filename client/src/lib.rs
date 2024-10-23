@@ -67,6 +67,7 @@ impl PaintBrush {
     Debug,
 )]
 pub enum BrushType {
+    None,
     Graffiti,
     Pencil,
     #[default]

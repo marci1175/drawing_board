@@ -1,7 +1,6 @@
 use crate::{Application, BrushType};
 use egui::{
-    emath::{self},
-    vec2, Color32, Pos2, Rect, Sense, Stroke, Ui,
+    emath::{self}, vec2, Color32, Pos2, Rect, Sense, Stroke, Ui
 };
 
 impl Application {
@@ -9,50 +8,83 @@ impl Application {
         let (mut response, painter) =
             ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
 
+        let paint_area_square_proportions = response.rect.square_proportions();
+
         let to_screen = emath::RectTransform::from_to(
-            Rect::from_min_size(Pos2::ZERO, response.rect.square_proportions()),
+            Rect::from_min_size(Pos2::ZERO, paint_area_square_proportions),
             response.rect,
         );
 
         let from_screen = to_screen.inverse();
 
-        if self.lines.is_empty() {
-            self.lines.push((
-                vec![],
-                self.paintbrush
-                    .get_nth_brush(self.paintbrush.brush_type as usize),
-            ));
-        }
+        match self.paintbrush.brush_type {
+            BrushType::Graffiti | BrushType::Pencil | BrushType::Marker => {
+                if self.lines.is_empty() {
+                    self.lines.push((
+                        vec![],
+                        self.paintbrush
+                            .get_nth_brush(self.paintbrush.brush_type as usize),
+                    ));
+                }
+        
+                let current_line = self.lines.last_mut().unwrap();
+        
+                if let Some(pointer_pos) = response.interact_pointer_pos() {
+                    let canvas_pos = from_screen * pointer_pos;
+                    if current_line.0.last() != Some(&canvas_pos) {
+                        current_line.0.push(canvas_pos);
+                        current_line.1 = self
+                            .paintbrush
+                            .get_nth_brush(self.paintbrush.brush_type as usize);
+                        response.mark_changed();
+                    }
+                    // self.undoer.add_undo(&self.lines);
 
-        let current_line = self.lines.last_mut().unwrap();
+                } else if !current_line.0.is_empty() {
+                    self.lines.push((
+                        vec![],
+                        self.paintbrush
+                            .get_nth_brush(self.paintbrush.brush_type as usize),
+                    ));
+                    response.mark_changed();
+                    self.undoer.add_undo(&self.lines);
+                }
+        
+                let shapes = self
+                    .lines
+                    .iter()
+                    .filter(|line| line.0.len() >= 2)
+                    .map(|line| draw_line_to_screen_with_brush(line, to_screen));
+        
+                painter.extend(shapes);
+            },
+            BrushType::Eraser => {
+                if let Some(pointer_pos) = response.interact_pointer_pos() {
+                    let pointer_board_pos = from_screen * pointer_pos;
+                    for (line_idx, (lines_pos, (line_width, _, _))) in self.lines.clone().iter().enumerate() {
+                        for line_pos in lines_pos {
+                            if Rect::from_center_size(*line_pos, paint_area_square_proportions / vec2(*line_width, *line_width)).contains(pointer_board_pos) {
+                                //Without this check we would have an inavlid indexing
+                                //Investigate
+                                if !line_idx >= self.lines.len() {
+                                    self.lines.remove(line_idx);
 
-        if let Some(pointer_pos) = response.interact_pointer_pos() {
-            let canvas_pos = from_screen * pointer_pos;
-            if current_line.0.last() != Some(&canvas_pos) {
-                current_line.0.push(canvas_pos);
-                current_line.1 = self
-                    .paintbrush
-                    .get_nth_brush(self.paintbrush.brush_type as usize);
-                response.mark_changed();
+                                    self.undoer.add_undo(&self.lines);
+                                }
+
+                                response.mark_changed();
+                            };
+                        }
+                    }
+                }
+
+                painter.extend(self.lines.iter().map(|line| draw_line_to_screen_with_brush(line, to_screen)));
             }
-        } else if !current_line.0.is_empty() {
-            self.lines.push((
-                vec![],
-                self.paintbrush
-                    .get_nth_brush(self.paintbrush.brush_type as usize),
-            ));
-            response.mark_changed();
+            BrushType::None => {
+
+            }
         }
 
-        let shapes = self
-            .lines
-            .iter()
-            .filter(|line| line.0.len() >= 2)
-            .map(|line| draw_line_to_screen_with_brush(line, to_screen));
-
-        painter.extend(shapes);
-
-        self.undoer.feed_state(1.5, &self.lines);
 
         response
     }
@@ -75,9 +107,6 @@ fn draw_line_to_screen_with_brush(
     let (width, color, brush_type) = line.1;
 
     match brush_type {
-        BrushType::Graffiti => {
-            todo!()
-        }
         BrushType::Pencil => egui::Shape::Vec(egui::Shape::dashed_line(
             &points,
             Stroke::new(width, color),
@@ -85,9 +114,9 @@ fn draw_line_to_screen_with_brush(
             width,
         )),
         BrushType::Marker => egui::Shape::line(points, Stroke::new(width, color)),
-        BrushType::Eraser => {
-            todo!()
-        }
+        BrushType::Graffiti => egui::Shape::Noop,
+        BrushType::Eraser => egui::Shape::Noop,
+        BrushType::None => egui::Shape::Noop,
     }
 }
 
@@ -95,9 +124,6 @@ fn draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::
     let (width, color, brush_type) = line.1;
 
     match brush_type {
-        BrushType::Graffiti => {
-            todo!()
-        }
         BrushType::Pencil => egui::Shape::Vec(egui::Shape::dashed_line(
             &line.0,
             Stroke::new(width, color),
@@ -105,9 +131,9 @@ fn draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::
             width,
         )),
         BrushType::Marker => egui::Shape::line(line.0.clone(), Stroke::new(width, color)),
-        BrushType::Eraser => {
-            todo!()
-        }
+        BrushType::Eraser => egui::Shape::Noop,
+        BrushType::None => egui::Shape::Noop,
+        BrushType::Graffiti => egui::Shape::Noop,
     }
 }
 
@@ -176,6 +202,10 @@ impl eframe::App for Application {
                     if let Some(state) = self.undoer.redo(&self.lines) {
                         self.lines = state.clone();
                     }
+                }
+
+                if ui.button("Erase board").clicked() {
+                    self.lines.clear();
                 }
             });
 
