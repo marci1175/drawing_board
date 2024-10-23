@@ -21,7 +21,11 @@ pub struct PaintBrush {
 
 impl Default for PaintBrush {
     fn default() -> Self {
-        Self { brush_type: BrushType::default(), brush_width: [1.0; BrushType::COUNT], brush_color: Default::default() }
+        Self {
+            brush_type: BrushType::default(),
+            brush_width: [1.0; BrushType::COUNT],
+            brush_color: Default::default(),
+        }
     }
 }
 
@@ -30,7 +34,7 @@ impl PaintBrush {
         (
             self.brush_width[self.brush_type as usize],
             self.brush_color[self.brush_type as usize],
-            self.brush_type
+            self.brush_type,
         )
     }
 
@@ -38,7 +42,7 @@ impl PaintBrush {
         (
             &mut self.brush_width[self.brush_type as usize],
             &mut self.brush_color[self.brush_type as usize],
-            &mut self.brush_type
+            &mut self.brush_type,
         )
     }
 

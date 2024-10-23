@@ -1,10 +1,6 @@
 use crate::{Application, BrushType};
 use egui::{
-    emath::{self, RectTransform}, pos2,
-    util::{
-        self,
-        undoer::{self, Undoer},
-    },
+    emath::{self},
     vec2, Color32, Pos2, Rect, Sense, Stroke, Ui,
 };
 
@@ -95,9 +91,7 @@ fn draw_line_to_screen_with_brush(
     }
 }
 
-fn draw_line_with_brush(
-    line: &(Vec<Pos2>, (f32, Color32, BrushType)),
-) -> egui::Shape {
+fn draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::Shape {
     let (width, color, brush_type) = line.1;
 
     match brush_type {
@@ -159,7 +153,10 @@ impl eframe::App for Application {
 
                 let (_, allocated_rect) = ui.allocate_space(vec2(50., ui.available_height()));
 
-                ui.painter_at(allocated_rect).add(draw_line_with_brush(&(vec![allocated_rect.left_center(), allocated_rect.right_center()], self.paintbrush.get_current_brush())));
+                ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
+                    vec![allocated_rect.left_center(), allocated_rect.right_center()],
+                    self.paintbrush.get_current_brush(),
+                )));
 
                 let can_undo = self.undoer.has_undo(&self.lines);
                 let can_redo = self.undoer.has_redo(&self.lines);

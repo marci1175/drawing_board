@@ -9,7 +9,7 @@ fn main() -> eframe::Result<()> {
         Create the ability to save the boards
         Create the ability to have more boards at once
     */
-    
+
     let native_options = NativeOptions {
         ..Default::default()
     };
