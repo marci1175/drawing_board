@@ -14,7 +14,7 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| {
             let application = Application::new(cc);
-            
+
             // cc.egui_ctx.load_texture("_paint_graffiti", ImageData::Color(Arc::new(ColorImage::example())), TextureOptions::LINEAR_REPEAT);
 
             Ok(Box::new(application))
