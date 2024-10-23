@@ -1,15 +1,44 @@
-use egui::{emath, vec2, Color32, Pos2, Rect, Sense, Stroke, Ui};
+use egui::{Color32, Pos2, Stroke};
+use strum::{EnumCount, IntoStaticStr};
+mod app;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct Application {
-    lines: Vec<Vec<Pos2>>,
-    stroke: Stroke,
+    lines: Vec<(Vec<Pos2>, (f32, Color32))>,
+    paintbrush: PaintBrush,
 }
 
-enum Brush {
-    Grafiti,
+#[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
+pub struct PaintBrush {
+    brush_type: BrushType,
+    brush_width: [f32; BrushType::COUNT],
+    brush_color: [Color32; BrushType::COUNT],
+}
+
+impl PaintBrush {
+    pub fn get_current_brush(&self) -> (f32, Color32)
+    {
+        (self.brush_width[self.brush_type as usize], self.brush_color[self.brush_type as usize])
+    }
+
+    pub fn get_mut_current_brush(&mut self) -> (&mut f32, &mut Color32) {
+        (&mut self.brush_width[self.brush_type as usize], &mut self.brush_color[self.brush_type as usize])
+    }
+
+    pub fn get_nth_brush(&self, nth: usize) -> (f32, Color32)
+    {
+        (self.brush_width[nth], self.brush_color[nth])
+    }
+}
+
+
+#[derive(serde::Serialize, serde::Deserialize, Default, PartialEq, Clone, Copy, EnumCount, IntoStaticStr, Debug)]
+pub enum BrushType {
+    Graffiti,
     Pencil,
+    #[default]
     Marker,
+    Eraser,
 }
 
 impl Application {
@@ -22,77 +51,5 @@ impl Application {
         }
 
         Self::default()
-    }
-
-    pub fn ui_content(&mut self, ui: &mut Ui) -> egui::Response {
-        let (mut response, painter) =
-            ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
-
-        let to_screen = emath::RectTransform::from_to(
-            Rect::from_min_size(Pos2::ZERO, response.rect.square_proportions()),
-            response.rect,
-        );
-
-        let from_screen = to_screen.inverse();
-
-        if self.lines.is_empty() {
-            self.lines.push(vec![]);
-        }
-
-        let current_line = self.lines.last_mut().unwrap();
-
-        if let Some(pointer_pos) = response.interact_pointer_pos() {
-            let canvas_pos = from_screen * pointer_pos;
-            if current_line.last() != Some(&canvas_pos) {
-                current_line.push(canvas_pos);
-                response.mark_changed();
-            }
-        } else if !current_line.is_empty() {
-            self.lines.push(vec![]);
-            response.mark_changed();
-        }
-
-        let shapes = self
-            .lines
-            .iter()
-            .filter(|line| line.len() >= 2)
-            .map(|line| {
-                let points: Vec<Pos2> = line.iter().map(|p| to_screen * *p).collect();
-                egui::Shape::line(points, self.stroke)
-            });
-
-        painter.extend(shapes);
-
-        response
-    }
-}
-
-impl eframe::App for Application {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("settings_bar").show(ctx, |ui| {
-            ui.allocate_space(vec2(ui.available_width(), 10.));
-            
-            ui.horizontal(|ui| {
-                ui.menu_button("Brush", |ui| {
-                    // ui.selectable_value(&Brush::Marker, selected_value, text)
-                });
-
-                let mut color: [u8; 4] = self.stroke.color.to_array();
-
-                ui.color_edit_button_srgba_premultiplied(&mut color);
-
-                self.stroke.color = Color32::from_rgba_premultiplied(color[0], color[1], color[2], color[3]);
-            });
-
-            ui.allocate_space(vec2(ui.available_width(), 10.));
-        });
-        
-        egui::CentralPanel::default().show(ctx, |ui| {
-            egui::Frame::canvas(ui.style()).show(ui, |ui| self.ui_content(ui));
-        });
-    }
-
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, eframe::APP_KEY, self);
     }
 }
