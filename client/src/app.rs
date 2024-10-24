@@ -1,6 +1,7 @@
 use crate::{Application, BrushType};
 use egui::{
-    emath::{self, Rot2}, frame, vec2, Color32, Mesh, Pos2, Rect, Sense, Stroke, Ui
+    emath::{self},
+    vec2, Color32, Pos2, Rect, Sense, Stroke, Ui,
 };
 
 impl Application {
@@ -26,9 +27,9 @@ impl Application {
                             .get_nth_brush(self.paintbrush.brush_type as usize),
                     ));
                 }
-        
+
                 let current_line = self.lines.last_mut().unwrap();
-        
+
                 if let Some(pointer_pos) = response.interact_pointer_pos() {
                     let canvas_pos = from_screen * pointer_pos;
                     if current_line.0.last() != Some(&canvas_pos) {
@@ -38,38 +39,47 @@ impl Application {
                             .get_nth_brush(self.paintbrush.brush_type as usize);
                         response.mark_changed();
                     }
-
                 } else if !current_line.0.is_empty() {
                     self.lines.push((
                         vec![],
                         self.paintbrush
                             .get_nth_brush(self.paintbrush.brush_type as usize),
                     ));
+
+                    if !self.undoer.is_in_flux() {
+                        self.undoer.add_undo(&self.lines);
+                    }
+
                     response.mark_changed();
-                    self.undoer.add_undo(&self.lines);
                 }
-        
+
                 let shapes = self
                     .lines
                     .iter()
                     .filter(|line| line.0.len() >= 2)
                     .map(|line| draw_line_to_screen_with_brush(line, to_screen));
-        
+
                 painter.extend(shapes);
-            },
+            }
             BrushType::Eraser => {
-                    if let Some(pointer_pos) = response.interact_pointer_pos() {
+                if let Some(pointer_pos) = response.interact_pointer_pos() {
                     let (brush_width, _, _) = self.paintbrush.get_current_brush();
-                    for (line_idx, (lines_pos, (line_width, _, _))) in self.lines.clone().iter().enumerate() {
+                    for (line_idx, (lines_pos, (line_width, _, _))) in
+                        self.lines.clone().iter().enumerate()
+                    {
                         let mut last_rect = Rect::NOTHING;
 
                         for line_pos in lines_pos {
-                            let current_rect = Rect::from_center_size(to_screen * *line_pos, vec2(*line_width + brush_width, *line_width + brush_width));
+                            let current_rect = Rect::from_center_size(
+                                to_screen * *line_pos,
+                                vec2(*line_width + brush_width, *line_width + brush_width),
+                            );
                             let rect = last_rect.union(current_rect);
 
                             if rect.contains(pointer_pos) {
                                 self.lines.remove(line_idx);
                                 self.undoer.add_undo(&self.lines);
+
                                 response.mark_changed();
                                 break;
                             }
@@ -79,13 +89,14 @@ impl Application {
                     }
                 }
 
-                painter.extend(self.lines.iter().map(|line| draw_line_to_screen_with_brush(line, to_screen)));
+                painter.extend(
+                    self.lines
+                        .iter()
+                        .map(|line| draw_line_to_screen_with_brush(line, to_screen)),
+                );
             }
-            BrushType::None => {
-
-            }
+            BrushType::None => {}
         }
-
 
         response
     }
@@ -218,7 +229,8 @@ impl eframe::App for Application {
 
             if let Some(pointer_pos) = ctx.pointer_hover_pos() {
                 let (size, color, _) = self.paintbrush.get_current_brush();
-                ui.painter().circle_filled(pointer_pos, size / 2., color.gamma_multiply(0.5));
+                ui.painter()
+                    .circle_filled(pointer_pos, size / 2., color.gamma_multiply(0.5));
             }
         });
     }
