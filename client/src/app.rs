@@ -1,6 +1,6 @@
 use crate::{Application, BrushType};
 use egui::{
-    emath::{self}, vec2, Color32, Pos2, Rect, Sense, Stroke, Ui
+    emath::{self, Rot2}, frame, vec2, Color32, Mesh, Pos2, Rect, Sense, Stroke, Ui
 };
 
 impl Application {
@@ -38,7 +38,6 @@ impl Application {
                             .get_nth_brush(self.paintbrush.brush_type as usize);
                         response.mark_changed();
                     }
-                    // self.undoer.add_undo(&self.lines);
 
                 } else if !current_line.0.is_empty() {
                     self.lines.push((
@@ -59,21 +58,23 @@ impl Application {
                 painter.extend(shapes);
             },
             BrushType::Eraser => {
-                if let Some(pointer_pos) = response.interact_pointer_pos() {
-                    let pointer_board_pos = from_screen * pointer_pos;
+                    if let Some(pointer_pos) = response.interact_pointer_pos() {
+                    let (brush_width, _, _) = self.paintbrush.get_current_brush();
                     for (line_idx, (lines_pos, (line_width, _, _))) in self.lines.clone().iter().enumerate() {
+                        let mut last_rect = Rect::NOTHING;
+
                         for line_pos in lines_pos {
-                            if Rect::from_center_size(*line_pos, paint_area_square_proportions / vec2(*line_width, *line_width)).contains(pointer_board_pos) {
-                                //Without this check we would have an inavlid indexing
-                                //Investigate
-                                if !line_idx >= self.lines.len() {
-                                    self.lines.remove(line_idx);
+                            let current_rect = Rect::from_center_size(to_screen * *line_pos, vec2(*line_width + brush_width, *line_width + brush_width));
+                            let rect = last_rect.union(current_rect);
 
-                                    self.undoer.add_undo(&self.lines);
-                                }
-
+                            if rect.contains(pointer_pos) {
+                                self.lines.remove(line_idx);
+                                self.undoer.add_undo(&self.lines);
                                 response.mark_changed();
-                            };
+                                break;
+                            }
+
+                            last_rect = current_rect;
                         }
                     }
                 }
@@ -214,6 +215,11 @@ impl eframe::App for Application {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::Frame::canvas(ui.style()).show(ui, |ui| self.ui_content(ui));
+
+            if let Some(pointer_pos) = ctx.pointer_hover_pos() {
+                let (size, color, _) = self.paintbrush.get_current_brush();
+                ui.painter().circle_filled(pointer_pos, size / 2., color.gamma_multiply(0.5));
+            }
         });
     }
 
