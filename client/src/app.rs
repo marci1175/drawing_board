@@ -159,47 +159,46 @@ impl eframe::App for Application {
                     ui.menu_button("Brush", |ui| {
                         ui.with_layout(Layout::right_to_left(egui::Align::Min), |ui| {
                             let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
-                        ui.menu_button(paintbrush_name, |ui| {
-                            ui.selectable_value(
-                                &mut self.paintbrush.brush_type,
-                                BrushType::Marker,
-                                "Marker",
-                            );
-                            ui.selectable_value(
-                                &mut self.paintbrush.brush_type,
-                                BrushType::Graffiti,
-                                "Graffiti",
-                            );
-                            ui.selectable_value(
-                                &mut self.paintbrush.brush_type,
-                                BrushType::Pencil,
-                                "Pencil",
-                            );
-                            ui.selectable_value(
-                                &mut self.paintbrush.brush_type,
-                                BrushType::Eraser,
-                                "Eraser",
-                            );
-                        });
+                            ui.menu_button(paintbrush_name, |ui| {
+                                ui.selectable_value(
+                                    &mut self.paintbrush.brush_type,
+                                    BrushType::Marker,
+                                    "Marker",
+                                );
+                                ui.selectable_value(
+                                    &mut self.paintbrush.brush_type,
+                                    BrushType::Graffiti,
+                                    "Graffiti",
+                                );
+                                ui.selectable_value(
+                                    &mut self.paintbrush.brush_type,
+                                    BrushType::Pencil,
+                                    "Pencil",
+                                );
+                                ui.selectable_value(
+                                    &mut self.paintbrush.brush_type,
+                                    BrushType::Eraser,
+                                    "Eraser",
+                                );
+                            });
 
-                        self.color_picker(ui);
+                            self.color_picker(ui);
 
-                        ui.add(
-                            egui::Slider::new(
-                                &mut self.paintbrush.brush_width
-                                    [self.paintbrush.brush_type as usize],
-                                1.0..=100.0,
-                            )
-                            .step_by(0.2),
-                        );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.paintbrush.brush_width
+                                        [self.paintbrush.brush_type as usize],
+                                    1.0..=100.0,
+                                )
+                                .step_by(0.2),
+                            );
 
-                        let (_, allocated_rect) =
-                            ui.allocate_space(ui.min_size());
+                            let (_, allocated_rect) = ui.allocate_space(ui.min_size());
 
-                        ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
-                            vec![allocated_rect.left_center(), allocated_rect.right_center()],
-                            self.paintbrush.get_current_brush(),
-                        )));
+                            ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
+                                vec![allocated_rect.left_center(), allocated_rect.right_center()],
+                                self.paintbrush.get_current_brush(),
+                            )));
                         });
                     });
 
