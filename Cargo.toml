@@ -4,4 +4,3 @@ members = [
     "server"
 ]
 resolver = "2"
-default-members = ["client"]

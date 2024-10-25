@@ -1,12 +1,14 @@
 use std::{
-    net::{IpAddr, Ipv6Addr, SocketAddrV6},
+    net::{Ipv6Addr, SocketAddr, SocketAddrV6},
     sync::Arc,
 };
 
+use dashmap::DashMap;
 use quinn::{
     rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer},
-    Endpoint, EndpointConfig, ServerConfig,
+    Endpoint, RecvStream, SendStream, ServerConfig,
 };
+use tokio::{io::AsyncReadExt, sync::mpsc};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,32 +18,69 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     let addr = Ipv6Addr::LOCALHOST;
 
-    let (server_config, server_cert) = configure_server()?;
+    let (server_config, _server_cert) = configure_server()?;
 
     let endpoint = Endpoint::server(
         server_config,
         std::net::SocketAddr::V6(SocketAddrV6::new(addr, 3004, 0, 0)),
     )?;
 
+    let (sx, mut rx) = mpsc::channel::<(SendStream, RecvStream, SocketAddr)>(10);
+
+    //Spawn relay thread
+    let _: tokio::task::JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+        let client_list: DashMap<SocketAddr, (SendStream, RecvStream)> = DashMap::new();
+
+        let mut username_list: Vec<String> = vec![];
+
+        loop {
+            let incoming_client = rx.recv().await;
+
+            if let Some(mut client) = incoming_client {
+                let mut username: String = String::new();
+
+                client.1.read_to_string(&mut username).await?;
+
+                for mut client in client_list.iter_mut() {
+                    let (client_sender, _) = client.value_mut();
+                    client_sender.write_all(username.as_bytes()).await?;
+                }
+
+                username_list.push(username);
+
+                //Send the list of the usernames to the
+                client
+                    .0
+                    .write_all(serde_json::to_string(&username_list)?.as_bytes())
+                    .await?;
+
+                client_list.insert(client.2, (client.0, client.1));
+            }
+        }
+    });
+
+    //Handle incoming requests
     loop {
+        let sx = sx.clone();
+
         //Wait for an incoming connection
         let inbound_connection = endpoint.accept().await;
 
         //Spawn async thread
         let _: tokio::task::JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
             let incoming_connection = inbound_connection.unwrap();
-        
+
             let connection = incoming_connection.await?;
 
-            let (recv_stream, send_stream) = connection.accept_bi().await?;
+            let (sendstream, recvstream) = connection.accept_bi().await?;
 
-            
+            sx.send((sendstream, recvstream, connection.remote_address()))
+                .await
+                .unwrap();
 
             Ok(())
         });
     }
-
-    Ok(())
 }
 
 pub fn configure_server() -> anyhow::Result<(ServerConfig, CertificateDer<'static>)> {

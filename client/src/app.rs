@@ -1,7 +1,6 @@
 use crate::{Application, BrushType};
 use egui::{
-    emath::{self},
-    vec2, Color32, Pos2, Rect, Sense, Stroke, Ui,
+    emath::{self}, vec2, Color32, Grid, Layout, Pos2, Rect, Sense, Stroke, Ui
 };
 
 impl Application {
@@ -154,73 +153,78 @@ impl eframe::App for Application {
         egui::TopBottomPanel::top("settings_bar").show(ctx, |ui| {
             ui.allocate_space(vec2(ui.available_width(), 10.));
 
-            ui.horizontal(|ui| {
-                let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
-                ui.menu_button(paintbrush_name, |ui| {
-                    ui.selectable_value(
-                        &mut self.paintbrush.brush_type,
-                        BrushType::Marker,
-                        "Marker",
+            ui.columns_const(|[col_1, col_2]| {
+                col_1.horizontal(|ui| {
+                    let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
+                    ui.menu_button(paintbrush_name, |ui| {
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Marker,
+                            "Marker",
+                        );
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Graffiti,
+                            "Graffiti",
+                        );
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Pencil,
+                            "Pencil",
+                        );
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Eraser,
+                            "Eraser",
+                        );
+                    });
+
+                    self.color_picker(ui);
+
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize],
+                            1.0..=100.0,
+                        )
+                        .step_by(0.2),
                     );
-                    ui.selectable_value(
-                        &mut self.paintbrush.brush_type,
-                        BrushType::Graffiti,
-                        "Graffiti",
-                    );
-                    ui.selectable_value(
-                        &mut self.paintbrush.brush_type,
-                        BrushType::Pencil,
-                        "Pencil",
-                    );
-                    ui.selectable_value(
-                        &mut self.paintbrush.brush_type,
-                        BrushType::Eraser,
-                        "Eraser",
-                    );
+
+                    let (_, allocated_rect) = ui.allocate_space(vec2(50., ui.available_height()));
+
+                    ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
+                        vec![allocated_rect.left_center(), allocated_rect.right_center()],
+                        self.paintbrush.get_current_brush(),
+                    )));
+
+                    let can_undo = self.undoer.has_undo(&self.lines);
+                    let can_redo = self.undoer.has_redo(&self.lines);
+
+                    if ui
+                        .add_enabled(can_undo, egui::Button::new("Undo"))
+                        .clicked()
+                    {
+                        if let Some(state) = self.undoer.undo(&self.lines) {
+                            self.lines = state.clone();
+                        }
+                    }
+                    if ui
+                        .add_enabled(can_redo, egui::Button::new("Redo"))
+                        .clicked()
+                    {
+                        if let Some(state) = self.undoer.redo(&self.lines) {
+                            self.lines = state.clone();
+                        }
+                    }
+
+                    if ui.button("Erase board").clicked() {
+                        self.lines.clear();
+                    }
                 });
 
-                self.color_picker(ui);
-
-                ui.add(
-                    egui::Slider::new(
-                        &mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize],
-                        1.0..=100.0,
-                    )
-                    .step_by(0.2),
-                );
-
-                let (_, allocated_rect) = ui.allocate_space(vec2(50., ui.available_height()));
-
-                ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
-                    vec![allocated_rect.left_center(), allocated_rect.right_center()],
-                    self.paintbrush.get_current_brush(),
-                )));
-
-                let can_undo = self.undoer.has_undo(&self.lines);
-                let can_redo = self.undoer.has_redo(&self.lines);
-
-                if ui
-                    .add_enabled(can_undo, egui::Button::new("Undo"))
-                    .clicked()
-                {
-                    if let Some(state) = self.undoer.undo(&self.lines) {
-                        self.lines = state.clone();
-                    }
-                }
-                if ui
-                    .add_enabled(can_redo, egui::Button::new("Redo"))
-                    .clicked()
-                {
-                    if let Some(state) = self.undoer.redo(&self.lines) {
-                        self.lines = state.clone();
-                    }
-                }
-
-                if ui.button("Erase board").clicked() {
-                    self.lines.clear();
-                }
+                col_2.with_layout(Layout::right_to_left(egui::Align::Min), |ui| {
+                    ui.button("Connect");
+                });
             });
-
             ui.allocate_space(vec2(ui.available_width(), 10.));
         });
 
