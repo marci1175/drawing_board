@@ -1,6 +1,7 @@
 use crate::{Application, BrushType};
 use egui::{
-    emath::{self}, vec2, Color32, Grid, Layout, Pos2, Rect, Sense, Stroke, Ui
+    emath::{self},
+    vec2, Color32, Grid, Layout, Pos2, Rect, Sense, Stroke, Ui,
 };
 
 impl Application {
@@ -155,46 +156,52 @@ impl eframe::App for Application {
 
             ui.columns_const(|[col_1, col_2]| {
                 col_1.horizontal(|ui| {
-                    let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
-                    ui.menu_button(paintbrush_name, |ui| {
-                        ui.selectable_value(
-                            &mut self.paintbrush.brush_type,
-                            BrushType::Marker,
-                            "Marker",
+                    ui.menu_button("Brush", |ui| {
+                        ui.with_layout(Layout::right_to_left(egui::Align::Min), |ui| {
+                            let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
+                        ui.menu_button(paintbrush_name, |ui| {
+                            ui.selectable_value(
+                                &mut self.paintbrush.brush_type,
+                                BrushType::Marker,
+                                "Marker",
+                            );
+                            ui.selectable_value(
+                                &mut self.paintbrush.brush_type,
+                                BrushType::Graffiti,
+                                "Graffiti",
+                            );
+                            ui.selectable_value(
+                                &mut self.paintbrush.brush_type,
+                                BrushType::Pencil,
+                                "Pencil",
+                            );
+                            ui.selectable_value(
+                                &mut self.paintbrush.brush_type,
+                                BrushType::Eraser,
+                                "Eraser",
+                            );
+                        });
+
+                        self.color_picker(ui);
+
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.paintbrush.brush_width
+                                    [self.paintbrush.brush_type as usize],
+                                1.0..=100.0,
+                            )
+                            .step_by(0.2),
                         );
-                        ui.selectable_value(
-                            &mut self.paintbrush.brush_type,
-                            BrushType::Graffiti,
-                            "Graffiti",
-                        );
-                        ui.selectable_value(
-                            &mut self.paintbrush.brush_type,
-                            BrushType::Pencil,
-                            "Pencil",
-                        );
-                        ui.selectable_value(
-                            &mut self.paintbrush.brush_type,
-                            BrushType::Eraser,
-                            "Eraser",
-                        );
+
+                        let (_, allocated_rect) =
+                            ui.allocate_space(ui.min_size());
+
+                        ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
+                            vec![allocated_rect.left_center(), allocated_rect.right_center()],
+                            self.paintbrush.get_current_brush(),
+                        )));
+                        });
                     });
-
-                    self.color_picker(ui);
-
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize],
-                            1.0..=100.0,
-                        )
-                        .step_by(0.2),
-                    );
-
-                    let (_, allocated_rect) = ui.allocate_space(vec2(50., ui.available_height()));
-
-                    ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
-                        vec![allocated_rect.left_center(), allocated_rect.right_center()],
-                        self.paintbrush.get_current_brush(),
-                    )));
 
                     let can_undo = self.undoer.has_undo(&self.lines);
                     let can_redo = self.undoer.has_redo(&self.lines);

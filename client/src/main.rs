@@ -5,7 +5,6 @@ fn main() -> eframe::Result<()> {
     /* TODO:
         Add textures for painting
         Create a voice call library
-        Start writing server
         Create the ability to save the boards
         Create the ability to have more boards at once
         Investigate invalid indexing
