@@ -1,15 +1,60 @@
-use egui::{util::undoer::Undoer, Color32, Pos2};
+use egui::{
+    ahash::{HashSet, HashSetExt},
+    util::undoer::Undoer,
+    Color32, Pos2,
+};
+use egui_dock::{DockState, SurfaceIndex};
 use strum::{EnumCount, IntoStaticStr};
 mod app;
 
 pub type BrushMap = Vec<(Vec<Pos2>, (f32, Color32, BrushType))>;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
-pub struct Application {
+pub struct ApplicationContext {
     lines: BrushMap,
     paintbrush: PaintBrush,
 
     undoer: Undoer<BrushMap>,
+    open_tabs: HashSet<TabType>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Application {
+    tree: DockState<TabType>,
+    context: ApplicationContext,
+}
+#[derive(
+    IntoStaticStr, Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq,
+)]
+pub enum TabType {
+    Canvas,
+    BrushSettings,
+}
+
+impl Default for Application {
+    fn default() -> Self {
+        let dock_state = DockState::new(vec![TabType::Canvas]);
+
+        let mut open_tabs = HashSet::new();
+
+        for node in dock_state[SurfaceIndex::main()].iter() {
+            if let Some(tabs) = node.tabs() {
+                for tab in tabs {
+                    open_tabs.insert(*tab);
+                }
+            }
+        }
+
+        let context = ApplicationContext {
+            open_tabs,
+            ..Default::default()
+        };
+
+        Self {
+            tree: dock_state,
+            context,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -78,7 +123,7 @@ pub enum BrushType {
 impl Application {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         if let Some(storage) = cc.storage {
-            let data: Application = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+            let data = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
 
             return data;
         }

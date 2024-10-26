@@ -1,10 +1,12 @@
-use crate::{Application, BrushType};
+use crate::{Application, ApplicationContext, BrushType, TabType};
 use egui::{
     emath::{self},
-    vec2, Color32, Grid, Layout, Pos2, Rect, Sense, Stroke, Ui,
+    vec2, CentralPanel, Color32, Frame, Pos2, Rect, Sense, Stroke,
+    TopBottomPanel, Ui,
 };
+use egui_dock::{DockArea, TabViewer};
 
-impl Application {
+impl ApplicationContext {
     pub fn ui_content(&mut self, ui: &mut Ui) -> egui::Response {
         let (mut response, painter) =
             ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
@@ -111,10 +113,7 @@ impl Application {
     }
 }
 
-fn draw_line_to_screen_with_brush(
-    line: &(Vec<Pos2>, (f32, Color32, BrushType)),
-    to_screen: emath::RectTransform,
-) -> egui::Shape {
+fn draw_line_to_screen_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType)), to_screen: emath::RectTransform) -> egui::Shape {
     let points: Vec<Pos2> = line.0.iter().map(|p| to_screen * *p).collect();
     let (width, color, brush_type) = line.1;
 
@@ -131,7 +130,6 @@ fn draw_line_to_screen_with_brush(
         BrushType::None => egui::Shape::Noop,
     }
 }
-
 fn draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::Shape {
     let (width, color, brush_type) = line.1;
 
@@ -149,62 +147,84 @@ fn draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::
     }
 }
 
-impl eframe::App for Application {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("settings_bar").show(ctx, |ui| {
-            ui.allocate_space(vec2(ui.available_width(), 10.));
+impl TabViewer for ApplicationContext {
+    type Tab = TabType;
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        let widget_title: &'static str = (*tab).into();
 
-            ui.columns_const(|[col_1, col_2]| {
-                col_1.horizontal(|ui| {
-                    ui.menu_button("Brush", |ui| {
-                        ui.with_layout(Layout::right_to_left(egui::Align::Min), |ui| {
-                            let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
-                            ui.menu_button(paintbrush_name, |ui| {
-                                ui.selectable_value(
-                                    &mut self.paintbrush.brush_type,
-                                    BrushType::Marker,
-                                    "Marker",
-                                );
-                                ui.selectable_value(
-                                    &mut self.paintbrush.brush_type,
-                                    BrushType::Graffiti,
-                                    "Graffiti",
-                                );
-                                ui.selectable_value(
-                                    &mut self.paintbrush.brush_type,
-                                    BrushType::Pencil,
-                                    "Pencil",
-                                );
-                                ui.selectable_value(
-                                    &mut self.paintbrush.brush_type,
-                                    BrushType::Eraser,
-                                    "Eraser",
-                                );
-                            });
+        widget_title.into()
+    }
 
-                            self.color_picker(ui);
+    fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
+        match _tab {
+            TabType::Canvas => false,
+            TabType::BrushSettings => true,
+        }
+    }
 
-                            ui.add(
-                                egui::Slider::new(
-                                    &mut self.paintbrush.brush_width
-                                        [self.paintbrush.brush_type as usize],
-                                    1.0..=100.0,
-                                )
-                                .step_by(0.2),
-                            );
+    fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
+        match tab {
+            TabType::Canvas => {
+                egui::Frame::canvas(ui.style()).show(ui, |ui| self.ui_content(ui));
 
-                            let (_, allocated_rect) = ui.allocate_space(ui.min_size());
+                if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
+                    let (size, color, _) = self.paintbrush.get_current_brush();
+                    ui.painter()
+                        .circle_filled(pointer_pos, size / 2., color.gamma_multiply(0.5));
+                }
+            }
+            TabType::BrushSettings => {
+                ui.allocate_space(vec2(ui.available_width(), 10.));
 
-                            ui.painter_at(allocated_rect).add(draw_line_with_brush(&(
-                                vec![allocated_rect.left_center(), allocated_rect.right_center()],
-                                self.paintbrush.get_current_brush(),
-                            )));
-                        });
+                let paintbrush_name: &'static str = self.paintbrush.brush_type.into();
+                ui.horizontal(|ui| {
+                    ui.label("Brush type");
+                    ui.menu_button(paintbrush_name, |ui| {
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Marker,
+                            "Marker",
+                        );
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Graffiti,
+                            "Graffiti",
+                        );
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Pencil,
+                            "Pencil",
+                        );
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::Eraser,
+                            "Eraser",
+                        );
                     });
+                });
 
-                    let can_undo = self.undoer.has_undo(&self.lines);
-                    let can_redo = self.undoer.has_redo(&self.lines);
+                ui.separator();
 
+                ui.horizontal(|ui| {
+                    ui.label("Color");
+                    self.color_picker(ui);
+                });
+
+                ui.label("Width");
+                ui.add(
+                    egui::Slider::new(
+                        &mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize],
+                        1.0..=100.0,
+                    )
+                    .step_by(0.2),
+                );
+
+                ui.separator();
+
+                let can_undo = self.undoer.has_undo(&self.lines);
+                let can_redo = self.undoer.has_redo(&self.lines);
+
+                ui.horizontal(|ui| {
                     if ui
                         .add_enabled(can_undo, egui::Button::new("Undo"))
                         .clicked()
@@ -227,22 +247,39 @@ impl eframe::App for Application {
                     }
                 });
 
-                col_2.with_layout(Layout::right_to_left(egui::Align::Min), |ui| {
-                    ui.button("Connect");
+                ui.allocate_space(vec2(ui.available_width(), 10.));
+            }
+        }
+    }
+}
+
+impl eframe::App for Application {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        TopBottomPanel::top("settings_bar").show(ctx, |ui| {
+            ui.menu_button("Workspace", |ui| {
+                ui.menu_button("Tooling", |ui| {
+                    let tree_node = self.tree.find_tab(&TabType::BrushSettings);
+                    if ui
+                        .checkbox(&mut tree_node.is_some(), "Brush settings")
+                        .clicked()
+                    {
+                        if let Some(node) = tree_node {
+                            self.tree.remove_tab(node);
+                        } else {
+                            self.tree.push_to_focused_leaf(TabType::BrushSettings);
+                        }
+                    };
                 });
             });
-            ui.allocate_space(vec2(ui.available_width(), 10.));
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            egui::Frame::canvas(ui.style()).show(ui, |ui| self.ui_content(ui));
-
-            if let Some(pointer_pos) = ctx.pointer_hover_pos() {
-                let (size, color, _) = self.paintbrush.get_current_brush();
-                ui.painter()
-                    .circle_filled(pointer_pos, size / 2., color.gamma_multiply(0.5));
-            }
-        });
+        CentralPanel::default()
+            .frame(Frame::central_panel(&ctx.style()).inner_margin(0.))
+            .show(ctx, |ui| {
+                DockArea::new(&mut self.tree)
+                    .show_window_close_buttons(true)
+                    .show_inside(ui, &mut self.context);
+            });
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
