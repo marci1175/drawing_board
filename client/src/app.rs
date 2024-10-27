@@ -273,7 +273,7 @@ impl eframe::App for Application {
                     if ui.button("Save").clicked() {}
 
                     if ui.button("Save Project").clicked() {
-                        if let Some(saved_file_path) = rfd::FileDialog::new().save_file() {
+                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &["dbproject"]).save_file() {
                             if let Err(err) = fs::write(
                                 saved_file_path,
                                 serde_json::to_string(&self.context).unwrap(),
