@@ -1,8 +1,9 @@
-use crate::{Application, ApplicationContext, BrushType, TabType};
+use std::fs;
+
+use crate::{display_error, Application, ApplicationContext, BrushType, TabType};
 use egui::{
     emath::{self},
-    vec2, CentralPanel, Color32, Frame, Pos2, Rect, Sense, Stroke,
-    TopBottomPanel, Ui,
+    vec2, CentralPanel, Color32, Frame, Pos2, Rect, Sense, Stroke, TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
 
@@ -113,7 +114,10 @@ impl ApplicationContext {
     }
 }
 
-fn draw_line_to_screen_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType)), to_screen: emath::RectTransform) -> egui::Shape {
+fn draw_line_to_screen_with_brush(
+    line: &(Vec<Pos2>, (f32, Color32, BrushType)),
+    to_screen: emath::RectTransform,
+) -> egui::Shape {
     let points: Vec<Pos2> = line.0.iter().map(|p| to_screen * *p).collect();
     let (width, color, brush_type) = line.1;
 
@@ -252,23 +256,60 @@ impl TabViewer for ApplicationContext {
         }
     }
 }
-
 impl eframe::App for Application {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         TopBottomPanel::top("settings_bar").show(ctx, |ui| {
-            ui.menu_button("Workspace", |ui| {
-                ui.menu_button("Tooling", |ui| {
-                    let tree_node = self.tree.find_tab(&TabType::BrushSettings);
-                    if ui
-                        .checkbox(&mut tree_node.is_some(), "Brush settings")
-                        .clicked()
-                    {
-                        if let Some(node) = tree_node {
-                            self.tree.remove_tab(node);
-                        } else {
-                            self.tree.push_to_focused_leaf(TabType::BrushSettings);
-                        }
-                    };
+            ui.horizontal(|ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("New File").clicked() {}
+                    if ui.button("Open File").clicked() {
+                        if let Err(err) = self.read_project_file() {
+                            display_error(err);
+                        };
+                    }
+
+                    ui.separator();
+
+                    if ui.button("Save").clicked() {}
+
+                    if ui.button("Save Project").clicked() {
+                        if let Some(saved_file_path) = rfd::FileDialog::new().save_file() {
+                            if let Err(err) = fs::write(
+                                saved_file_path,
+                                serde_json::to_string(&self.context).unwrap(),
+                            ) {
+                                display_error(err);
+                            }
+                        };
+                    }
+
+                    if ui.button("Save As").clicked() {}
+
+                    ui.separator();
+
+                    ui.checkbox(&mut true, "Auto Save");
+
+                    ui.separator();
+
+                    if ui.button("Exit").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+
+                ui.menu_button("Workspace", |ui| {
+                    ui.menu_button("Tooling", |ui| {
+                        let tree_node = self.tree.find_tab(&TabType::BrushSettings);
+                        if ui
+                            .checkbox(&mut tree_node.is_some(), "Brush settings")
+                            .clicked()
+                        {
+                            if let Some(node) = tree_node {
+                                self.tree.remove_tab(node);
+                            } else {
+                                self.tree.push_to_focused_leaf(TabType::BrushSettings);
+                            }
+                        };
+                    });
                 });
             });
         });

@@ -1,3 +1,6 @@
+use std::{fs, path::PathBuf};
+
+use chrono::{Local, NaiveDate, Utc};
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
@@ -14,8 +17,27 @@ pub struct ApplicationContext {
     lines: BrushMap,
     paintbrush: PaintBrush,
 
+    session: Session,
+
     undoer: Undoer<BrushMap>,
     open_tabs: HashSet<TabType>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+pub struct Session {
+    pub file_path: PathBuf,
+    pub project_name: String,
+    pub project_created: NaiveDate,
+}
+
+impl Session {
+    pub fn create_session(file_path: PathBuf, project_name: String) -> Self {
+        Self {
+            file_path,
+            project_name,
+            project_created: Local::now().date_naive(),
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -23,6 +45,7 @@ pub struct Application {
     tree: DockState<TabType>,
     context: ApplicationContext,
 }
+
 #[derive(
     IntoStaticStr, Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq,
 )]
@@ -130,4 +153,26 @@ impl Application {
 
         Self::default()
     }
+}
+
+impl Application {
+    fn read_project_file(&mut self) -> anyhow::Result<()> {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Supported files", &["dbproject"])
+            .pick_file()
+        {
+            let deserialized_context = fs::read_to_string(path)?;
+            self.context = serde_json::from_str::<ApplicationContext>(&deserialized_context)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn display_error(err: impl ToString) {
+    rfd::MessageDialog::new()
+        .set_title("Error")
+        .set_description(err.to_string())
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
