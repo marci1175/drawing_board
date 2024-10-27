@@ -1,12 +1,15 @@
-use std::{fs, path::PathBuf};
+pub const DRAWING_BOARD_IMAGE_EXT: &str = "dbimg";
+pub const DRAWING_BOARD_WORKSPACE_EXT: &str = "dbproject";
 
-use chrono::{Local, NaiveDate, Utc};
+use std::{fs, path::PathBuf};
+use chrono::{Local, NaiveDate};
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
     Color32, Pos2,
 };
 use egui_dock::{DockState, SurfaceIndex};
+use serde::Deserialize;
 use strum::{EnumCount, IntoStaticStr};
 mod app;
 
@@ -44,6 +47,12 @@ impl Session {
 pub struct Application {
     tree: DockState<TabType>,
     context: ApplicationContext,
+}
+
+impl Application {
+    pub fn reset(&mut self) {
+        *self = Application::default();
+    }
 }
 
 #[derive(
@@ -155,20 +164,17 @@ impl Application {
     }
 }
 
-impl Application {
-    fn read_project_file(&mut self) -> anyhow::Result<()> {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Supported files", &["dbproject"])
-            .pick_file()
-        {
-            let deserialized_context = fs::read_to_string(path)?;
-            self.context = serde_json::from_str::<ApplicationContext>(&deserialized_context)?;
-        }
-
-        Ok(())
+fn read_file_into_memory<T : for<'a> Deserialize<'a>>(memory: &mut T, extension_filter: &str) -> anyhow::Result<()> {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter("Supported files", &[extension_filter])
+        .pick_file()
+    {
+        let deserialized_context = fs::read(path)?;
+        *memory = rmp_serde::from_slice::<T>(&miniz_oxide::inflate::decompress_to_vec(&deserialized_context)?)?;
     }
-}
 
+    Ok(())
+}
 fn display_error(err: impl ToString) {
     rfd::MessageDialog::new()
         .set_title("Error")

@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::{display_error, Application, ApplicationContext, BrushType, TabType};
+use crate::{display_error, read_file_into_memory, Application, ApplicationContext, BrushType, TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT};
 use egui::{
     emath::{self},
     vec2, CentralPanel, Color32, Frame, Pos2, Rect, Sense, Stroke, TopBottomPanel, Ui,
@@ -261,29 +261,58 @@ impl eframe::App for Application {
         TopBottomPanel::top("settings_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("New File").clicked() {}
-                    if ui.button("Open File").clicked() {
-                        if let Err(err) = self.read_project_file() {
+                    if ui.button("New File").clicked() {
+                        self.reset();
+                    }
+
+                    if ui.button("Open Image").clicked() {
+                        if let Err(err) = read_file_into_memory(&mut self.context.lines, DRAWING_BOARD_IMAGE_EXT) {
+                            display_error(err);
+                        };
+                    }
+
+                    if ui.button("Open Workspace").clicked() {
+                        if let Err(err) = read_file_into_memory(&mut self.context, DRAWING_BOARD_WORKSPACE_EXT) {
                             display_error(err);
                         };
                     }
 
                     ui.separator();
 
-                    if ui.button("Save").clicked() {}
+                    ui.button("Save").clicked();
 
-                    if ui.button("Save Project").clicked() {
-                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &["dbproject"]).save_file() {
+                    if ui.button("Save Workspace As").clicked() {
+                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &[DRAWING_BOARD_WORKSPACE_EXT]).save_file() {
                             if let Err(err) = fs::write(
                                 saved_file_path,
-                                serde_json::to_string(&self.context).unwrap(),
+                                miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&self.context).unwrap(), 10),
                             ) {
                                 display_error(err);
                             }
                         };
                     }
 
-                    if ui.button("Save As").clicked() {}
+                    if ui.button("Save Image").clicked() {
+                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &[DRAWING_BOARD_WORKSPACE_EXT]).save_file() {
+                            if let Err(err) = fs::write(
+                                saved_file_path,
+                                miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&self.context).unwrap(), 10),
+                            ) {
+                                display_error(err);
+                            }
+                        };
+                    }
+
+                    if ui.button("Save Image As").clicked() {
+                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &[DRAWING_BOARD_IMAGE_EXT]).save_file() {
+                            if let Err(err) = fs::write(
+                                saved_file_path,
+                                miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&self.context.lines).unwrap(), 10),
+                            ) {
+                                display_error(err);
+                            }
+                        };
+                    }
 
                     ui.separator();
 
