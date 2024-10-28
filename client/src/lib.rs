@@ -1,15 +1,15 @@
 pub const DRAWING_BOARD_IMAGE_EXT: &str = "dbimg";
 pub const DRAWING_BOARD_WORKSPACE_EXT: &str = "dbproject";
 
-use std::{fs, path::PathBuf};
 use chrono::{Local, NaiveDate};
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
-    Color32, Pos2,
+    Color32, ColorImage, Pos2,
 };
 use egui_dock::{DockState, SurfaceIndex};
 use serde::Deserialize;
+use std::{fs, path::PathBuf, sync::Arc};
 use strum::{EnumCount, IntoStaticStr};
 mod app;
 
@@ -20,10 +20,12 @@ pub struct ApplicationContext {
     lines: BrushMap,
     paintbrush: PaintBrush,
 
-    session: Session,
+    session: Option<Session>,
 
     undoer: Undoer<BrushMap>,
     open_tabs: HashSet<TabType>,
+
+    export_path: Option<PathBuf>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -47,6 +49,7 @@ impl Session {
 pub struct Application {
     tree: DockState<TabType>,
     context: ApplicationContext,
+    image: Arc<ColorImage>,
 }
 
 impl Application {
@@ -85,6 +88,7 @@ impl Default for Application {
         Self {
             tree: dock_state,
             context,
+            image: Arc::new(ColorImage::default()),
         }
     }
 }
@@ -164,13 +168,18 @@ impl Application {
     }
 }
 
-fn read_file_into_memory<T : for<'a> Deserialize<'a>>(memory: &mut T, extension_filter: &str) -> anyhow::Result<()> {
+fn read_file_into_memory<T: for<'a> Deserialize<'a>>(
+    memory: &mut T,
+    extension_filter: &str,
+) -> anyhow::Result<()> {
     if let Some(path) = rfd::FileDialog::new()
         .add_filter("Supported files", &[extension_filter])
         .pick_file()
     {
         let deserialized_context = fs::read(path)?;
-        *memory = rmp_serde::from_slice::<T>(&miniz_oxide::inflate::decompress_to_vec(&deserialized_context)?)?;
+        *memory = rmp_serde::from_slice::<T>(&miniz_oxide::inflate::decompress_to_vec(
+            &deserialized_context,
+        )?)?;
     }
 
     Ok(())

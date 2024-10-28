@@ -1,9 +1,12 @@
 use std::fs;
 
-use crate::{display_error, read_file_into_memory, Application, ApplicationContext, BrushType, TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT};
+use crate::{
+    display_error, read_file_into_memory, Application, ApplicationContext, BrushType, Session,
+    TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT,
+};
 use egui::{
     emath::{self},
-    vec2, CentralPanel, Color32, Frame, Pos2, Rect, Sense, Stroke, TopBottomPanel, Ui,
+    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, Sense, Stroke, TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
 
@@ -169,12 +172,33 @@ impl TabViewer for ApplicationContext {
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
             TabType::Canvas => {
-                egui::Frame::canvas(ui.style()).show(ui, |ui| self.ui_content(ui));
+                let canvas = egui::Frame::canvas(ui.style()).show(ui, |ui| self.ui_content(ui));
 
                 if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
                     let (size, color, _) = self.paintbrush.get_current_brush();
                     ui.painter()
                         .circle_filled(pointer_pos, size / 2., color.gamma_multiply(0.5));
+                }
+
+                if let Some(export_save_path) = &self.export_path {
+                    ui.ctx().input(|i| {
+                        for event in &i.raw.events {
+                            if let egui::Event::Screenshot { image, .. } = event {
+                                let pixels_per_point = i.pixels_per_point();
+                                let region = canvas.inner.rect;
+                                let image_region = image.region(&region, Some(pixels_per_point));
+                                if let Err(err) = image::save_buffer(
+                                    export_save_path,
+                                    image_region.as_raw(),
+                                    image_region.width() as u32,
+                                    image_region.height() as u32,
+                                    image::ColorType::Rgba8,
+                                ) {
+                                    display_error(err);
+                                }
+                            }
+                        }
+                    });
                 }
             }
             TabType::BrushSettings => {
@@ -266,26 +290,34 @@ impl eframe::App for Application {
                     }
 
                     if ui.button("Open Image").clicked() {
-                        if let Err(err) = read_file_into_memory(&mut self.context.lines, DRAWING_BOARD_IMAGE_EXT) {
+                        if let Err(err) =
+                            read_file_into_memory(&mut self.context.lines, DRAWING_BOARD_IMAGE_EXT)
+                        {
                             display_error(err);
                         };
                     }
 
                     if ui.button("Open Workspace").clicked() {
-                        if let Err(err) = read_file_into_memory(&mut self.context, DRAWING_BOARD_WORKSPACE_EXT) {
+                        if let Err(err) =
+                            read_file_into_memory(&mut self.context, DRAWING_BOARD_WORKSPACE_EXT)
+                        {
                             display_error(err);
                         };
                     }
 
                     ui.separator();
 
-                    ui.button("Save").clicked();
-
                     if ui.button("Save Workspace As").clicked() {
-                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &[DRAWING_BOARD_WORKSPACE_EXT]).save_file() {
+                        if let Some(saved_file_path) = rfd::FileDialog::new()
+                            .add_filter("Project File", &[DRAWING_BOARD_WORKSPACE_EXT])
+                            .save_file()
+                        {
                             if let Err(err) = fs::write(
                                 saved_file_path,
-                                miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&self.context).unwrap(), 10),
+                                miniz_oxide::deflate::compress_to_vec(
+                                    &rmp_serde::to_vec(&self.context).unwrap(),
+                                    10,
+                                ),
                             ) {
                                 display_error(err);
                             }
@@ -293,25 +325,56 @@ impl eframe::App for Application {
                     }
 
                     if ui.button("Save Image").clicked() {
-                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &[DRAWING_BOARD_WORKSPACE_EXT]).save_file() {
-                            if let Err(err) = fs::write(
-                                saved_file_path,
-                                miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&self.context).unwrap(), 10),
-                            ) {
+                        let compressed_save_file = miniz_oxide::deflate::compress_to_vec(
+                            &rmp_serde::to_vec(&self.context).unwrap(),
+                            10,
+                        );
+
+                        if let Some(session) = &self.context.session {
+                            if let Err(err) =
+                                fs::write(session.file_path.clone(), compressed_save_file)
+                            {
                                 display_error(err);
                             }
-                        };
+                        } else if let Some(saved_file_path) = rfd::FileDialog::new()
+                            .add_filter("Project File", &[DRAWING_BOARD_WORKSPACE_EXT])
+                            .save_file()
+                        {
+                            if let Err(err) = fs::write(saved_file_path, compressed_save_file) {
+                                display_error(err);
+                            }
+                        }
                     }
 
                     if ui.button("Save Image As").clicked() {
-                        if let Some(saved_file_path) = rfd::FileDialog::new().add_filter("Project File", &[DRAWING_BOARD_IMAGE_EXT]).save_file() {
+                        if let Some(saved_file_path) = rfd::FileDialog::new()
+                            .add_filter("Project File", &[DRAWING_BOARD_IMAGE_EXT])
+                            .save_file()
+                        {
                             if let Err(err) = fs::write(
-                                saved_file_path,
-                                miniz_oxide::deflate::compress_to_vec(&rmp_serde::to_vec(&self.context.lines).unwrap(), 10),
+                                &saved_file_path,
+                                miniz_oxide::deflate::compress_to_vec(
+                                    &rmp_serde::to_vec(&self.context.lines).unwrap(),
+                                    10,
+                                ),
                             ) {
                                 display_error(err);
                             }
+
+                            self.create_session(saved_file_path, ctx);
                         };
+                    }
+
+                    if ui.button("Export As Png").clicked() {
+                        if let Some(save_path) = rfd::FileDialog::new()
+                            .add_filter("Image", &["png"])
+                            .save_file()
+                        {
+                            self.context.export_path = Some(save_path);
+                            ui.close_menu();
+
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+                        }
                     }
 
                     ui.separator();
@@ -354,5 +417,20 @@ impl eframe::App for Application {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, self);
+    }
+}
+
+impl Application {
+    fn create_session(&mut self, saved_file_path: std::path::PathBuf, ctx: &Context) {
+        let project_name = saved_file_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        self.context.session = Some(Session::create_session(
+            saved_file_path.clone(),
+            project_name.clone(),
+        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(project_name));
     }
 }
