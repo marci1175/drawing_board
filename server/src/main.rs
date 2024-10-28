@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let (sx, mut rx) = mpsc::channel::<(SendStream, RecvStream, SocketAddr)>(10);
 
     //Spawn relay thread
-    let _: tokio::task::JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+    tokio::spawn(async move {
         let client_list: DashMap<SocketAddr, (SendStream, RecvStream)> = DashMap::new();
 
         let mut username_list: Vec<String> = vec![];
@@ -57,6 +57,8 @@ async fn main() -> anyhow::Result<()> {
                 client_list.insert(client.2, (client.0, client.1));
             }
         }
+
+        Ok::<(), anyhow::Error>(())
     });
 
     //Handle incoming requests
@@ -67,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         let inbound_connection = endpoint.accept().await;
 
         //Spawn async thread
-        let _: tokio::task::JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+        tokio::spawn(async move {
             let incoming_connection = inbound_connection.unwrap();
 
             let connection = incoming_connection.await?;
@@ -78,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .unwrap();
 
-            Ok(())
+            Ok::<(), anyhow::Error>(())
         });
     }
 }

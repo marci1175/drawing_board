@@ -8,9 +8,18 @@ use egui::{
     Color32, ColorImage, Pos2,
 };
 use egui_dock::{DockState, SurfaceIndex};
+use quinn::{
+    crypto::rustls::QuicClientConfig,
+    rustls::{
+        self,
+        pki_types::{CertificateDer, ServerName, UnixTime},
+    },
+    ClientConfig, Connection, Endpoint,
+};
 use serde::Deserialize;
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, net::Ipv6Addr, path::PathBuf, sync::Arc};
 use strum::{EnumCount, IntoStaticStr};
+use tokio::sync::RwLock;
 mod app;
 
 pub type BrushMap = Vec<(Vec<Pos2>, (f32, Color32, BrushType))>;
@@ -20,22 +29,38 @@ pub struct ApplicationContext {
     lines: BrushMap,
     paintbrush: PaintBrush,
 
-    session: Option<Session>,
+    file_session: Option<FileSession>,
 
     undoer: Undoer<BrushMap>,
     open_tabs: HashSet<TabType>,
+
+    connection: ConnectionData,
 
     export_path: Option<PathBuf>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
-pub struct Session {
+pub struct ConnectionData {
+    target_address: String,
+
+    #[serde(skip)]
+    current_session: ConnectionSession,
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct ConnectionSession {
+    #[serde(skip)]
+    connection: Arc<RwLock<Option<Connection>>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+pub struct FileSession {
     pub file_path: PathBuf,
     pub project_name: String,
     pub project_created: NaiveDate,
 }
 
-impl Session {
+impl FileSession {
     pub fn create_session(file_path: PathBuf, project_name: String) -> Self {
         Self {
             file_path,
@@ -64,6 +89,77 @@ impl Application {
 pub enum TabType {
     Canvas,
     BrushSettings,
+}
+
+#[derive(Debug)]
+struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
+
+impl SkipServerVerification {
+    fn new() -> Arc<Self> {
+        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+pub async fn connect_to_server(target_address: String) -> anyhow::Result<quinn::Connection> {
+    let mut endpoint: Endpoint = Endpoint::client((Ipv6Addr::UNSPECIFIED, 0).into())?;
+
+    endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_no_client_auth(),
+    )?)));
+
+    let client: quinn::Connection = endpoint
+        .connect(target_address.parse()?, "localhost")?
+        .await?;
+
+    Ok(client)
 }
 
 impl Default for Application {

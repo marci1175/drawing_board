@@ -1,7 +1,8 @@
 use drawing_board_client::Application;
 use eframe::NativeOptions;
 
-fn main() -> eframe::Result<()> {
+#[tokio::main]
+async fn main() -> eframe::Result<()> {
     /* TODO:
         Add textures for painting
         Create a voice call library

@@ -1,12 +1,13 @@
 use std::fs;
 
 use crate::{
-    display_error, read_file_into_memory, Application, ApplicationContext, BrushType, Session,
-    TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT,
+    connect_to_server, display_error, read_file_into_memory, Application, ApplicationContext,
+    BrushType, FileSession, TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT,
 };
 use egui::{
     emath::{self},
-    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, Sense, Stroke, TopBottomPanel, Ui,
+    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, RichText, Sense, Stroke,
+    TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
 
@@ -137,7 +138,7 @@ fn draw_line_to_screen_with_brush(
         BrushType::None => egui::Shape::Noop,
     }
 }
-fn draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::Shape {
+fn _draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::Shape {
     let (width, color, brush_type) = line.1;
 
     match brush_type {
@@ -330,7 +331,7 @@ impl eframe::App for Application {
                             10,
                         );
 
-                        if let Some(session) = &self.context.session {
+                        if let Some(session) = &self.context.file_session {
                             if let Err(err) =
                                 fs::write(session.file_path.clone(), compressed_save_file)
                             {
@@ -403,6 +404,57 @@ impl eframe::App for Application {
                         };
                     });
                 });
+
+                ui.menu_button("Connections", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Target Address");
+                        ui.add_enabled_ui(
+                            self.context
+                                .connection
+                                .current_session
+                                .connection
+                                .try_read()
+                                .is_ok_and(|inner| inner.is_none()),
+                            |ui| {
+                                ui.text_edit_singleline(
+                                    &mut self.context.connection.target_address,
+                                );
+                            },
+                        );
+                    });
+
+                    if let Ok(Some(current_session)) = &self
+                        .context
+                        .connection
+                        .current_session
+                        .connection
+                        .try_read()
+                        .map(|con| con.clone())
+                    {
+                        let ping = current_session.rtt().as_millis();
+                        let clamped_ping = ping.clamp(0, 255) as u8;
+                        ui.label(
+                            RichText::new(format!("Estimated ping: {ping}ms"))
+                                .color(Color32::from_rgb(clamped_ping, 255 - clamped_ping, 0)),
+                        );
+                        if ui.button("Disconnect").clicked() {}
+                    } else if ui.button("Connect").clicked() {
+                        let target_address = self.context.connection.target_address.clone();
+                        let current_connection =
+                            self.context.connection.current_session.connection.clone();
+
+                        tokio::spawn(async move {
+                            match connect_to_server(target_address).await {
+                                Ok(client) => {
+                                    *current_connection.write().await = Some(client);
+                                }
+                                Err(err) => {
+                                    display_error(err);
+                                }
+                            }
+                        });
+                    }
+                });
             });
         });
 
@@ -427,7 +479,7 @@ impl Application {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        self.context.session = Some(Session::create_session(
+        self.context.file_session = Some(FileSession::create_session(
             saved_file_path.clone(),
             project_name.clone(),
         ));
