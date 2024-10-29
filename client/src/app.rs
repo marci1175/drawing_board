@@ -1,4 +1,4 @@
-use std::{fs, sync::mpsc};
+use std::{collections::HashMap, fs, sync::mpsc};
 
 use crate::{
     connect_to_server, display_error, read_file_into_memory, Application, ApplicationContext,
@@ -7,8 +7,8 @@ use crate::{
 };
 use egui::{
     emath::{self},
-    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, RichText, Sense, Stroke,
-    TopBottomPanel, Ui,
+    vec2, Align2, CentralPanel, Color32, Context, FontId, Frame, Pos2, Rect, RichText, Sense,
+    Stroke, TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
 
@@ -442,12 +442,16 @@ impl eframe::App for Application {
                         let (sender, reciver) = mpsc::channel::<ConnectionSession>();
                         let target_address = self.context.connection.target_address.clone();
                         let username = self.context.connection.username.clone();
+                        let uuid = self.uuid;
 
                         self.context.connection.session_reciver = Some(reciver);
 
+                        let ctx_clone = ctx.clone();
+
                         tokio::spawn(async move {
-                            match connect_to_server(target_address, username).await {
+                            match connect_to_server(target_address, username, uuid).await {
                                 Ok(session) => {
+                                    ctx_clone.request_repaint();
                                     sender.send(session).unwrap();
                                 }
                                 Err(err) => {
@@ -466,6 +470,25 @@ impl eframe::App for Application {
                 DockArea::new(&mut self.tree)
                     .show_window_close_buttons(true)
                     .show_inside(ui, &mut self.context);
+
+                for (_, (username, cursor_pos)) in self.context.connection.connected_clients.iter()
+                {
+                    ui.painter().circle(
+                        *cursor_pos,
+                        15.,
+                        Color32::WHITE,
+                        Stroke::new(1., Color32::WHITE),
+                    );
+                    ui.painter().text(
+                        *cursor_pos * 1.1,
+                        Align2::CENTER_CENTER,
+                        username,
+                        FontId::monospace(20.),
+                        Color32::GRAY,
+                    );
+
+                    ctx.request_repaint();
+                }
             });
 
         if let Some(reciver) = &self.context.connection.session_reciver {
@@ -473,6 +496,57 @@ impl eframe::App for Application {
                 self.context.connection.current_session = Some(val);
             }
         }
+
+        if let Some(session) = self.context.connection.current_session.as_mut() {
+            match session.message_reciver_from_server.try_recv() {
+                Ok(message) => match message.msg_type {
+                    common_definitions::MessageType::ClientList(clients) => {
+                        self.context.connection.connected_clients = HashMap::from_iter(
+                            clients
+                                .iter()
+                                .map(|entry| (entry.1, (entry.0.clone(), Pos2::default()))),
+                        )
+                    }
+                    common_definitions::MessageType::CursorPosition(x, y) => {
+                        if let Some((_, pos)) = self
+                            .context
+                            .connection
+                            .connected_clients
+                            .get_mut(&message.uuid)
+                        {
+                            *pos = Pos2::new(x, y);
+                        }
+                    }
+                    common_definitions::MessageType::Connecting(username) => {
+                        self.context
+                            .connection
+                            .connected_clients
+                            .insert(message.uuid, (username, Pos2::default()));
+                    }
+                    common_definitions::MessageType::Disconnecting => {
+                        self.context
+                            .connection
+                            .connected_clients
+                            .remove(&message.uuid);
+                    }
+
+                    _ => unimplemented!(),
+                },
+                Err(err) => {
+                    dbg!(err);
+
+                    // self.context.connection.current_session = None;
+                }
+            }
+
+            if let Some(cur_pos) = ctx.pointer_latest_pos() {
+                if let Err(err) = session.pointer_sender_to_server.try_send(cur_pos) {
+                    dbg!(err);
+
+                    self.context.connection.current_session = None;
+                }
+            }
+        };
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

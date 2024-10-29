@@ -2,6 +2,7 @@ pub const DRAWING_BOARD_IMAGE_EXT: &str = "dbimg";
 pub const DRAWING_BOARD_WORKSPACE_EXT: &str = "dbproject";
 
 use chrono::{Local, NaiveDate};
+use common_definitions::Message;
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
@@ -18,13 +19,11 @@ use quinn::{
 };
 use serde::Deserialize;
 use std::{
-    fs,
-    net::Ipv6Addr,
-    path::PathBuf,
-    sync::{mpsc::Receiver, Arc},
+    collections::HashMap, fs, net::Ipv6Addr, path::PathBuf, str::FromStr, sync::Arc, time::Duration,
 };
 use strum::{EnumCount, IntoStaticStr};
 use tokio::{
+    io::AsyncReadExt,
     select,
     sync::{
         mpsc::{channel, Sender},
@@ -32,6 +31,7 @@ use tokio::{
     },
 };
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 mod app;
 
 pub type BrushMap = Vec<(Vec<Pos2>, (f32, Color32, BrushType))>;
@@ -57,7 +57,9 @@ pub struct ConnectionData {
     username: String,
 
     #[serde(skip)]
-    session_reciver: Option<Receiver<ConnectionSession>>,
+    session_reciver: Option<std::sync::mpsc::Receiver<ConnectionSession>>,
+
+    connected_clients: HashMap<Uuid, (String, Pos2)>,
 
     #[serde(skip)]
     current_session: Option<ConnectionSession>,
@@ -70,9 +72,11 @@ pub struct ConnectionSession {
 
     pub send_stream: Arc<Mutex<SendStream>>,
 
-    pub recv_stream: Arc<RecvStream>,
+    pub recv_stream: Arc<Mutex<RecvStream>>,
 
-    pub pointer_sync_thread: Sender<Pos2>,
+    pub pointer_sender_to_server: Sender<Pos2>,
+
+    pub message_reciver_from_server: tokio::sync::mpsc::Receiver<Message>,
 }
 
 impl ConnectionSession {
@@ -102,6 +106,8 @@ impl FileSession {
 pub struct Application {
     tree: DockState<TabType>,
     context: ApplicationContext,
+
+    uuid: Uuid,
 }
 
 impl Application {
@@ -175,6 +181,7 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
 pub async fn connect_to_server(
     target_address: String,
     username: String,
+    uuid: Uuid,
 ) -> anyhow::Result<ConnectionSession> {
     let mut endpoint: Endpoint = Endpoint::client((Ipv6Addr::UNSPECIFIED, 0).into())?;
 
@@ -194,27 +201,44 @@ pub async fn connect_to_server(
     let connection_cancellation_token = CancellationToken::new();
 
     //Send username
-    send_stream.write_all(username.as_bytes()).await.unwrap();
-
-    send_stream.finish().unwrap();
+    send_stream
+        .write_all(
+            &Message::to_serde_string(
+                uuid,
+                common_definitions::MessageType::Connecting(username.clone()),
+            )
+            .into_sendable(),
+        )
+        .await
+        .unwrap();
 
     let send_stream = Arc::new(Mutex::new(send_stream));
-
+    let recv_stream = Arc::new(Mutex::new(recv_stream));
     let session = ConnectionSession {
         connection_cancellation_token: connection_cancellation_token.clone(),
         send_stream: send_stream.clone(),
-        recv_stream: Arc::new(recv_stream),
+        recv_stream: recv_stream.clone(),
         connection_handle: Arc::new(RwLock::new(client)),
-        pointer_sync_thread: {
-            let (pos_sender, mut pos_reciver) = channel::<Pos2>(100);
+        pointer_sender_to_server: {
+            //Clone values so that they can be moved into the closure
+            let (pos_sender, mut pos_reciver) = channel::<Pos2>(255);
+            let connection_cancellation_token_clone = connection_cancellation_token.clone();
+            let send_stream = send_stream.clone();
 
             tokio::spawn(async move {
                 loop {
+                    let uuid = uuid;
+
                     select! {
-                        _ = connection_cancellation_token.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                            let mut server_handle = send_stream.lock().await;
+                            server_handle.write_all(&Message {uuid, msg_type: common_definitions::MessageType::KeepAlive}.into_sendable()).await.unwrap();
+                        }
+                        _ = connection_cancellation_token_clone.cancelled() => break,
                         recv_pos = pos_reciver.recv() => {
                             if let Some(pos) = recv_pos {
-                                send_stream.lock().await.write_all(serde_json::to_string(&common_definitions::MessageType::CursorPosition(pos.x, pos.y)).unwrap().as_bytes()).await.unwrap();
+                                let mut server_handle = send_stream.lock().await;
+                                server_handle.write_all(&Message {uuid, msg_type: common_definitions::MessageType::CursorPosition(pos.x, pos.y)}.into_sendable()).await.unwrap();
                             }
                         }
                     }
@@ -222,6 +246,28 @@ pub async fn connect_to_server(
             });
 
             pos_sender
+        },
+        message_reciver_from_server: {
+            let (msg_sender, msg_reciver) = channel::<Message>(255);
+
+            tokio::spawn(async move {
+                loop {
+                    select! {
+                        _ = connection_cancellation_token.cancelled() => break,
+                        mut recv_stream = recv_stream.lock() => {
+                            let message_length = recv_stream.read_u64().await.unwrap();
+
+                            let mut message_buf = vec![0; message_length as usize];
+
+                            recv_stream.read_exact(&mut message_buf).await.unwrap();
+
+                            msg_sender.send(Message::from_str(&String::from_utf8(message_buf).unwrap()).unwrap()).await.unwrap();
+                        }
+                    }
+                }
+            });
+
+            msg_reciver
         },
     };
 
@@ -250,6 +296,7 @@ impl Default for Application {
         Self {
             tree: dock_state,
             context,
+            uuid: Uuid::new_v4(),
         }
     }
 }

@@ -22,3 +22,5 @@ strum = {version = "0.26.3", features = ["derive"]}
 image = {default-features = false, features = ["png"], version = "0.25.4"}
 tokio = { version = "1.41.0", features = ["full"] }
 tokio-util = "0.7.12"
+console-subscriber = "0.4.1"
+uuid = {version = "1.11.0", features = ["serde", "v4"]}
