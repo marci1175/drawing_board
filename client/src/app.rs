@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    sync::{mpsc, Arc},
-};
+use std::{fs, sync::mpsc};
 
 use crate::{
     connect_to_server, display_error, read_file_into_memory, Application, ApplicationContext,
@@ -14,11 +11,6 @@ use egui::{
     TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
-use tokio::{
-    select,
-    sync::{mpsc::channel, Mutex, RwLock},
-};
-use tokio_util::sync::CancellationToken;
 
 impl ApplicationContext {
     pub fn ui_content(&mut self, ui: &mut Ui) -> egui::Response {
@@ -415,13 +407,21 @@ impl eframe::App for Application {
                 });
 
                 ui.menu_button("Connections", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Target Address");
-                        ui.text_edit_singleline(&mut self.context.connection.target_address);
+                    ui.add_enabled_ui(self.context.connection.current_session.is_none(), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Target Address");
+                            ui.text_edit_singleline(&mut self.context.connection.target_address);
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Username");
+                            ui.text_edit_singleline(&mut self.context.connection.username);
+                        });
                     });
 
                     if let Some(connection_session) = &self.context.connection.current_session {
-                        if let Ok(current_session) = connection_session.connection_handle
+                        if let Ok(current_session) = connection_session
+                            .connection_handle
                             .try_read()
                             .map(|con| con.clone())
                         {
@@ -433,18 +433,20 @@ impl eframe::App for Application {
                             );
 
                             if ui.button("Disconnect").clicked() {
+                                connection_session.cancel_connection();
 
+                                self.context.connection.current_session = None;
                             }
                         }
-                    }
-                    else if ui.button("Connect").clicked() {
+                    } else if ui.button("Connect").clicked() {
                         let (sender, reciver) = mpsc::channel::<ConnectionSession>();
                         let target_address = self.context.connection.target_address.clone();
+                        let username = self.context.connection.username.clone();
 
                         self.context.connection.session_reciver = Some(reciver);
 
                         tokio::spawn(async move {
-                            match connect_to_server(target_address).await {
+                            match connect_to_server(target_address, username).await {
                                 Ok(session) => {
                                     sender.send(session).unwrap();
                                 }

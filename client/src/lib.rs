@@ -24,7 +24,13 @@ use std::{
     sync::{mpsc::Receiver, Arc},
 };
 use strum::{EnumCount, IntoStaticStr};
-use tokio::{select, sync::{mpsc::{channel, Sender}, Mutex, RwLock}};
+use tokio::{
+    select,
+    sync::{
+        mpsc::{channel, Sender},
+        Mutex, RwLock,
+    },
+};
 use tokio_util::sync::CancellationToken;
 mod app;
 
@@ -48,6 +54,7 @@ pub struct ApplicationContext {
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct ConnectionData {
     target_address: String,
+    username: String,
 
     #[serde(skip)]
     session_reciver: Option<Receiver<ConnectionSession>>,
@@ -165,7 +172,10 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     }
 }
 
-pub async fn connect_to_server(target_address: String) -> anyhow::Result<ConnectionSession> {
+pub async fn connect_to_server(
+    target_address: String,
+    username: String,
+) -> anyhow::Result<ConnectionSession> {
     let mut endpoint: Endpoint = Endpoint::client((Ipv6Addr::UNSPECIFIED, 0).into())?;
 
     endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
@@ -179,10 +189,14 @@ pub async fn connect_to_server(target_address: String) -> anyhow::Result<Connect
         .connect(target_address.parse()?, "localhost")?
         .await?;
 
-        let (send_stream, recv_stream) =
-        client.clone().accept_bi().await?;
+    let (mut send_stream, recv_stream) = client.clone().open_bi().await?;
 
     let connection_cancellation_token = CancellationToken::new();
+
+    //Send username
+    send_stream.write_all(username.as_bytes()).await.unwrap();
+
+    send_stream.finish().unwrap();
 
     let send_stream = Arc::new(Mutex::new(send_stream));
 
