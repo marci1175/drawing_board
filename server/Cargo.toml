@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+common_definitions = {path = "../common_definitions"}
 anyhow = "1.0.91"
 dashmap = "6.1.0"
 quinn = "0.11.5"

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "client",
+    "client", "common_definitions",
     "server"
 ]
 resolver = "2"

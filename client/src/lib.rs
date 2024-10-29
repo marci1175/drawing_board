@@ -5,7 +5,7 @@ use chrono::{Local, NaiveDate};
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
-    Color32, ColorImage, Pos2,
+    Color32, Pos2,
 };
 use egui_dock::{DockState, SurfaceIndex};
 use quinn::{
@@ -14,12 +14,18 @@ use quinn::{
         self,
         pki_types::{CertificateDer, ServerName, UnixTime},
     },
-    ClientConfig, Connection, Endpoint,
+    ClientConfig, Connection, Endpoint, RecvStream, SendStream,
 };
 use serde::Deserialize;
-use std::{fs, net::Ipv6Addr, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    net::Ipv6Addr,
+    path::PathBuf,
+    sync::{mpsc::Receiver, Arc},
+};
 use strum::{EnumCount, IntoStaticStr};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc::Sender, Mutex, RwLock};
+use tokio_util::sync::CancellationToken;
 mod app;
 
 pub type BrushMap = Vec<(Vec<Pos2>, (f32, Color32, BrushType))>;
@@ -44,13 +50,28 @@ pub struct ConnectionData {
     target_address: String,
 
     #[serde(skip)]
-    current_session: ConnectionSession,
+    session_reciver: Option<Receiver<ConnectionSession>>,
+
+    #[serde(skip)]
+    current_session: Option<ConnectionSession>,
 }
 
-#[derive(serde::Deserialize, Default)]
 pub struct ConnectionSession {
-    #[serde(skip)]
-    connection: Arc<RwLock<Option<Connection>>>,
+    pub connection_cancellation_token: CancellationToken,
+
+    pub connection_handle: Arc<RwLock<Connection>>,
+
+    pub send_stream: Arc<Mutex<SendStream>>,
+
+    pub recv_stream: Arc<RecvStream>,
+
+    pub pointer_sync_thread: Sender<Pos2>,
+}
+
+impl ConnectionSession {
+    pub fn cancel_connection(&self) {
+        self.connection_cancellation_token.cancel();
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -74,7 +95,6 @@ impl FileSession {
 pub struct Application {
     tree: DockState<TabType>,
     context: ApplicationContext,
-    image: Arc<ColorImage>,
 }
 
 impl Application {
@@ -184,7 +204,6 @@ impl Default for Application {
         Self {
             tree: dock_state,
             context,
-            image: Arc::new(ColorImage::default()),
         }
     }
 }

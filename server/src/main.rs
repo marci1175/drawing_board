@@ -4,6 +4,7 @@ use std::{
 };
 
 use dashmap::DashMap;
+use drawing_board_server::Client;
 use quinn::{
     rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer},
     Endpoint, RecvStream, SendStream, ServerConfig,
@@ -29,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
 
     //Spawn relay thread
     tokio::spawn(async move {
-        let client_list: DashMap<SocketAddr, (SendStream, RecvStream)> = DashMap::new();
+        let client_list: DashMap<SocketAddr, Client> = DashMap::new();
 
         let mut username_list: Vec<String> = vec![];
 
@@ -42,11 +43,11 @@ async fn main() -> anyhow::Result<()> {
                 client.1.read_to_string(&mut username).await?;
 
                 for mut client in client_list.iter_mut() {
-                    let (client_sender, _) = client.value_mut();
+                    let client_sender = &mut client.value_mut().send_stream;
                     client_sender.write_all(username.as_bytes()).await?;
                 }
 
-                username_list.push(username);
+                username_list.push(username.clone());
 
                 //Send the list of the usernames to the
                 client
@@ -54,7 +55,14 @@ async fn main() -> anyhow::Result<()> {
                     .write_all(serde_json::to_string(&username_list)?.as_bytes())
                     .await?;
 
-                client_list.insert(client.2, (client.0, client.1));
+                client_list.insert(
+                    client.2,
+                    Client {
+                        username,
+                        send_stream: client.0,
+                        recv_stream: client.1,
+                    },
+                );
             }
         }
 

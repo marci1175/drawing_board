@@ -1,7 +1,7 @@
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub enum MessageType {
-    /// This enum contains the list of the connected user's username
-    ClientList(Vec<String>),
-    /// This enum contains the username of the user who has their cursor's position at (f32, f32)
-    CursorPosition(String, (f32, f32)),
+use quinn::{RecvStream, SendStream};
+
+pub struct Client {
+    pub username: String,
+    pub send_stream: SendStream,
+    pub recv_stream: RecvStream,
 }

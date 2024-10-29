@@ -1,15 +1,23 @@
-use std::fs;
+use std::{
+    fs,
+    sync::{mpsc, Arc},
+};
 
 use crate::{
     connect_to_server, display_error, read_file_into_memory, Application, ApplicationContext,
-    BrushType, FileSession, TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT,
+    BrushType, ConnectionSession, FileSession, TabType, DRAWING_BOARD_IMAGE_EXT,
+    DRAWING_BOARD_WORKSPACE_EXT,
 };
 use egui::{
     emath::{self},
-    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, RichText, Sense, Stroke,
-    TopBottomPanel, Ui,
+    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, Sense, Stroke, TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
+use tokio::{
+    select,
+    sync::{mpsc::channel, Mutex, RwLock},
+};
+use tokio_util::sync::CancellationToken;
 
 impl ApplicationContext {
     pub fn ui_content(&mut self, ui: &mut Ui) -> egui::Response {
@@ -408,52 +416,56 @@ impl eframe::App for Application {
                 ui.menu_button("Connections", |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Target Address");
-                        ui.add_enabled_ui(
-                            self.context
-                                .connection
-                                .current_session
-                                .connection
-                                .try_read()
-                                .is_ok_and(|inner| inner.is_none()),
-                            |ui| {
-                                ui.text_edit_singleline(
-                                    &mut self.context.connection.target_address,
-                                );
-                            },
-                        );
+                        ui.text_edit_singleline(&mut self.context.connection.target_address);
                     });
 
-                    if let Ok(Some(current_session)) = &self
-                        .context
-                        .connection
-                        .current_session
-                        .connection
-                        .try_read()
-                        .map(|con| con.clone())
-                    {
-                        let ping = current_session.rtt().as_millis();
-                        let clamped_ping = ping.clamp(0, 255) as u8;
-                        ui.label(
-                            RichText::new(format!("Estimated ping: {ping}ms"))
-                                .color(Color32::from_rgb(clamped_ping, 255 - clamped_ping, 0)),
-                        );
-                        if ui.button("Disconnect").clicked() {}
-                    } else if ui.button("Connect").clicked() {
+                    if ui.button("Connect").clicked() {
+                        let (sender, reciver) = mpsc::channel::<ConnectionSession>();
                         let target_address = self.context.connection.target_address.clone();
-                        let current_connection =
-                            self.context.connection.current_session.connection.clone();
+
+                        self.context.connection.session_reciver = Some(reciver);
 
                         tokio::spawn(async move {
                             match connect_to_server(target_address).await {
                                 Ok(client) => {
-                                    *current_connection.write().await = Some(client);
+                                    let (send_stream, recv_stream) =
+                                        client.clone().accept_bi().await.unwrap();
+
+                                    let connection_cancellation_token = CancellationToken::new();
+
+                                    let send_stream = Arc::new(Mutex::new(send_stream));
+
+                                    sender.send(ConnectionSession {
+                                        connection_cancellation_token: connection_cancellation_token.clone(),
+                                        send_stream: send_stream.clone(),
+                                        recv_stream: Arc::new(recv_stream),
+                                        connection_handle: Arc::new(RwLock::new(client)),
+                                        pointer_sync_thread: {
+                                            let (pos_sender, mut pos_reciver) = channel::<Pos2>(100);
+
+                                            tokio::spawn(async move {
+                                                loop {
+                                                    select! {
+                                                        _ = connection_cancellation_token.cancelled() => break,
+                                                        recv_pos = pos_reciver.recv() => {
+                                                            // if let Some(pos) = recv_pos {
+                                                               // send_stream.lock().await;
+                                                            // }
+                                                        }
+                                                    }
+                                                }
+                                            });
+
+                                            pos_sender
+                                        },
+                                    }).unwrap();
                                 }
                                 Err(err) => {
                                     display_error(err);
                                 }
                             }
                         });
-                    }
+                    };
                 });
             });
         });
@@ -465,6 +477,12 @@ impl eframe::App for Application {
                     .show_window_close_buttons(true)
                     .show_inside(ui, &mut self.context);
             });
+
+        if let Some(reciver) = &self.context.connection.session_reciver {
+            if let Ok(val) = reciver.try_recv() {
+                self.context.connection.current_session = Some(val);
+            }
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
