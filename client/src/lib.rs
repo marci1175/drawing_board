@@ -24,7 +24,7 @@ use std::{
     sync::{mpsc::Receiver, Arc},
 };
 use strum::{EnumCount, IntoStaticStr};
-use tokio::sync::{mpsc::Sender, Mutex, RwLock};
+use tokio::{select, sync::{mpsc::{channel, Sender}, Mutex, RwLock}};
 use tokio_util::sync::CancellationToken;
 mod app;
 
@@ -165,7 +165,7 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     }
 }
 
-pub async fn connect_to_server(target_address: String) -> anyhow::Result<quinn::Connection> {
+pub async fn connect_to_server(target_address: String) -> anyhow::Result<ConnectionSession> {
     let mut endpoint: Endpoint = Endpoint::client((Ipv6Addr::UNSPECIFIED, 0).into())?;
 
     endpoint.set_default_client_config(ClientConfig::new(Arc::new(QuicClientConfig::try_from(
@@ -179,7 +179,39 @@ pub async fn connect_to_server(target_address: String) -> anyhow::Result<quinn::
         .connect(target_address.parse()?, "localhost")?
         .await?;
 
-    Ok(client)
+        let (send_stream, recv_stream) =
+        client.clone().accept_bi().await?;
+
+    let connection_cancellation_token = CancellationToken::new();
+
+    let send_stream = Arc::new(Mutex::new(send_stream));
+
+    let session = ConnectionSession {
+        connection_cancellation_token: connection_cancellation_token.clone(),
+        send_stream: send_stream.clone(),
+        recv_stream: Arc::new(recv_stream),
+        connection_handle: Arc::new(RwLock::new(client)),
+        pointer_sync_thread: {
+            let (pos_sender, mut pos_reciver) = channel::<Pos2>(100);
+
+            tokio::spawn(async move {
+                loop {
+                    select! {
+                        _ = connection_cancellation_token.cancelled() => break,
+                        recv_pos = pos_reciver.recv() => {
+                            if let Some(pos) = recv_pos {
+                                send_stream.lock().await.write_all(serde_json::to_string(&common_definitions::MessageType::CursorPosition(pos.x, pos.y)).unwrap().as_bytes()).await.unwrap();
+                            }
+                        }
+                    }
+                }
+            });
+
+            pos_sender
+        },
+    };
+
+    Ok(session)
 }
 
 impl Default for Application {

@@ -10,7 +10,8 @@ use crate::{
 };
 use egui::{
     emath::{self},
-    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, Sense, Stroke, TopBottomPanel, Ui,
+    vec2, CentralPanel, Color32, Context, Frame, Pos2, Rect, RichText, Sense, Stroke,
+    TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
 use tokio::{
@@ -419,7 +420,24 @@ impl eframe::App for Application {
                         ui.text_edit_singleline(&mut self.context.connection.target_address);
                     });
 
-                    if ui.button("Connect").clicked() {
+                    if let Some(connection_session) = &self.context.connection.current_session {
+                        if let Ok(current_session) = connection_session.connection_handle
+                            .try_read()
+                            .map(|con| con.clone())
+                        {
+                            let ping = current_session.rtt().as_millis();
+                            let clamped_ping = ping.clamp(0, 255) as u8;
+                            ui.label(
+                                RichText::new(format!("Estimated ping: {ping}ms"))
+                                    .color(Color32::from_rgb(clamped_ping, 255 - clamped_ping, 0)),
+                            );
+
+                            if ui.button("Disconnect").clicked() {
+
+                            }
+                        }
+                    }
+                    else if ui.button("Connect").clicked() {
                         let (sender, reciver) = mpsc::channel::<ConnectionSession>();
                         let target_address = self.context.connection.target_address.clone();
 
@@ -427,45 +445,15 @@ impl eframe::App for Application {
 
                         tokio::spawn(async move {
                             match connect_to_server(target_address).await {
-                                Ok(client) => {
-                                    let (send_stream, recv_stream) =
-                                        client.clone().accept_bi().await.unwrap();
-
-                                    let connection_cancellation_token = CancellationToken::new();
-
-                                    let send_stream = Arc::new(Mutex::new(send_stream));
-
-                                    sender.send(ConnectionSession {
-                                        connection_cancellation_token: connection_cancellation_token.clone(),
-                                        send_stream: send_stream.clone(),
-                                        recv_stream: Arc::new(recv_stream),
-                                        connection_handle: Arc::new(RwLock::new(client)),
-                                        pointer_sync_thread: {
-                                            let (pos_sender, mut pos_reciver) = channel::<Pos2>(100);
-
-                                            tokio::spawn(async move {
-                                                loop {
-                                                    select! {
-                                                        _ = connection_cancellation_token.cancelled() => break,
-                                                        recv_pos = pos_reciver.recv() => {
-                                                            // if let Some(pos) = recv_pos {
-                                                               // send_stream.lock().await;
-                                                            // }
-                                                        }
-                                                    }
-                                                }
-                                            });
-
-                                            pos_sender
-                                        },
-                                    }).unwrap();
+                                Ok(session) => {
+                                    sender.send(session).unwrap();
                                 }
                                 Err(err) => {
                                     display_error(err);
                                 }
                             }
                         });
-                    };
+                    }
                 });
             });
         });
