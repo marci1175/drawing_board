@@ -7,6 +7,7 @@ async fn main() -> eframe::Result<()> {
         Add textures for painting
         Create a voice call library
         Create the ability to have more boards at once
+        Make it so that exporting PNGs doesnt also export the client's cursor
     */
 
     #[cfg(debug_assertions)]

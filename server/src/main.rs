@@ -14,11 +14,13 @@ use quinn::{
 };
 use tokio::{
     io::AsyncReadExt,
+    select,
     sync::{
         broadcast::{self, Sender},
         mpsc,
     },
 };
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -64,7 +66,16 @@ async fn main() -> anyhow::Result<()> {
                     let client_sender = &mut client.value_mut().send_stream;
 
                     //If we get an error it is probably because the client had disconnected
-                    if let Err(_err) = client_sender.write_all(uuid.as_bytes()).await {
+                    if let Err(_err) = client_sender
+                        .write_all(
+                            &Message {
+                                msg_type: inner_message.clone(),
+                                uuid,
+                            }
+                            .into_sendable(),
+                        )
+                        .await
+                    {
                         client_list_clone.remove(&client_key);
                     };
                 }
@@ -77,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                 client
                     .0
                     .write_all(
-                        &common_definitions::Message::to_serde_string(
+                        &common_definitions::Message::new(
                             uuid,
                             common_definitions::MessageType::ClientList(
                                 username_uuid_pair_list.clone(),
@@ -91,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
                 client_list_clone.insert(
                     client.2,
                     Client {
-                        username: uuid.to_string(),
+                        uuid: uuid.to_string(),
                         send_stream: client.0,
                     },
                 );
@@ -104,20 +115,34 @@ async fn main() -> anyhow::Result<()> {
     //Spawn relay thread
     tokio::spawn(async move {
         loop {
-            match relay_reciver.recv().await {
-                Ok(recived_message) => {
+            select! {
+                recived_message = relay_reciver.recv() => {
+                    match recived_message {
+                        Ok(recived_message) => {
+                            for mut client_row in client_list.iter_mut() {
+                                let client = &mut client_row.send_stream;
+
+                                client
+                                    .write_all(&recived_message.into_sendable())
+                                    .await
+                                    .unwrap();
+                            }
+                        }
+                        Err(err) => {
+                            dbg!(err);
+                        }
+                    }
+                }
+
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
                     for mut client_row in client_list.iter_mut() {
                         let client = &mut client_row.send_stream;
 
                         client
-                            .write_all(&recived_message.into_sendable())
+                            .write_all(&Message {uuid: Uuid::default(), msg_type: MessageType::KeepAlive}.into_sendable())
                             .await
                             .unwrap();
                     }
-                }
-                Err(err) => {
-                    dbg!(err);
-                    panic!()
                 }
             }
         }
@@ -138,6 +163,8 @@ async fn main() -> anyhow::Result<()> {
 
             let connection = incoming_connection.await.unwrap();
 
+            dbg!(connection.remote_address());
+
             let (sendstream, recvstream) = connection.accept_bi().await.unwrap();
 
             sx.send((sendstream, recvstream, connection.remote_address()))
@@ -147,13 +174,14 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// This function creates a listener thread, from the ```recv_stream``` provided as an argument.
+/// All recived messages are sent to the relay (```Sender<Message>```) channel so that the relay thread can realy the message to all of the clients.
 pub fn spawn_client_listener(relay: Sender<Message>, mut recv_stream: RecvStream) {
     tokio::spawn(async move {
         loop {
             let message_buffer = read_from_stream(&mut recv_stream).await;
 
-            let message =
-                Message::from_str(dbg!(&String::from_utf8(message_buffer).unwrap())).unwrap();
+            let message = Message::from_str(&String::from_utf8(message_buffer).unwrap()).unwrap();
 
             if !matches!(message.msg_type, MessageType::KeepAlive) {
                 relay.send(message).unwrap();
@@ -162,6 +190,9 @@ pub fn spawn_client_listener(relay: Sender<Message>, mut recv_stream: RecvStream
     });
 }
 
+/// This function reads from the ```recv_stream``` provided as an argument.
+/// It first reads a ```u64``` to decide the message's length after it reads `n` number of bytes (Indicated by the header).
+/// It returns the read bytes.
 async fn read_from_stream(recv_stream: &mut RecvStream) -> Vec<u8> {
     let msg_length = recv_stream.read_u64().await.unwrap();
 
@@ -171,6 +202,7 @@ async fn read_from_stream(recv_stream: &mut RecvStream) -> Vec<u8> {
     message_buffer
 }
 
+/// Creates a custom ```(ServerConfig, CertificateDer<'static>)``` instance. The Certificate is insecure.
 pub fn configure_server() -> anyhow::Result<(ServerConfig, CertificateDer<'static>)> {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let cert_der = CertificateDer::from(cert.cert);

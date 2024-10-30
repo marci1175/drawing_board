@@ -7,8 +7,8 @@ use crate::{
 };
 use egui::{
     emath::{self},
-    vec2, Align2, CentralPanel, Color32, Context, FontId, Frame, Pos2, Rect, RichText, Sense,
-    Stroke, TopBottomPanel, Ui,
+    vec2, Align2, CentralPanel, Color32, Context, FontId, Frame, Key, Modifiers, Pos2, Rect,
+    RichText, Sense, Stroke, TopBottomPanel, Ui,
 };
 use egui_dock::{DockArea, TabViewer};
 
@@ -109,6 +109,7 @@ impl ApplicationContext {
         response
     }
 
+    /// This function handles the usage of a colorpicker for multiple paintbrushes.
     fn color_picker(&mut self, ui: &mut Ui) {
         let mut color: [u8; 4] = self.paintbrush.get_current_brush().1.to_array();
 
@@ -119,6 +120,7 @@ impl ApplicationContext {
     }
 }
 
+/// This function draws a line ((Vec<Pos2>, (f32, Color32, BrushType))) to the screen.
 fn draw_line_to_screen_with_brush(
     line: &(Vec<Pos2>, (f32, Color32, BrushType)),
     to_screen: emath::RectTransform,
@@ -258,6 +260,7 @@ impl TabViewer for ApplicationContext {
                     if ui
                         .add_enabled(can_undo, egui::Button::new("Undo"))
                         .clicked()
+                        || ui.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Z))
                     {
                         if let Some(state) = self.undoer.undo(&self.lines) {
                             self.lines = state.clone();
@@ -266,6 +269,7 @@ impl TabViewer for ApplicationContext {
                     if ui
                         .add_enabled(can_redo, egui::Button::new("Redo"))
                         .clicked()
+                        || ui.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Y))
                     {
                         if let Some(state) = self.undoer.redo(&self.lines) {
                             self.lines = state.clone();
@@ -442,14 +446,14 @@ impl eframe::App for Application {
                         let (sender, reciver) = mpsc::channel::<ConnectionSession>();
                         let target_address = self.context.connection.target_address.clone();
                         let username = self.context.connection.username.clone();
-                        let uuid = self.uuid;
+                        let uuid = self.uuid.0;
 
                         self.context.connection.session_reciver = Some(reciver);
 
                         let ctx_clone = ctx.clone();
 
                         tokio::spawn(async move {
-                            match connect_to_server(target_address, username, uuid).await {
+                            match connect_to_server(target_address, username, dbg!(uuid)).await {
                                 Ok(session) => {
                                     ctx_clone.request_repaint();
                                     sender.send(session).unwrap();
@@ -530,10 +534,11 @@ impl eframe::App for Application {
                             .remove(&message.uuid);
                     }
 
-                    _ => unimplemented!(),
+                    //Acknowledge keepalive message
+                    common_definitions::MessageType::KeepAlive => (),
                 },
                 Err(err) => {
-                    dbg!(err);
+                    // dbg!(err);
 
                     // self.context.connection.current_session = None;
                 }
@@ -555,6 +560,7 @@ impl eframe::App for Application {
 }
 
 impl Application {
+    /// This function creates a new ```FileSession``` if a file is saved as or opened.
     fn create_session(&mut self, saved_file_path: std::path::PathBuf, ctx: &Context) {
         let project_name = saved_file_path
             .file_name()

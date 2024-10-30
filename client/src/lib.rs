@@ -39,7 +39,7 @@ pub type BrushMap = Vec<(Vec<Pos2>, (f32, Color32, BrushType))>;
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct ApplicationContext {
     lines: BrushMap,
-    paintbrush: PaintBrush,
+    paintbrush: PaintBrushes,
 
     file_session: Option<FileSession>,
 
@@ -51,44 +51,68 @@ pub struct ApplicationContext {
     export_path: Option<PathBuf>,
 }
 
+/// This struct contains the information useful for the connection process (Like ```username```, ```target_address``` and ```connected_clients```), and the current session connected to the server.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct ConnectionData {
+    /// The target address of the server we would like to connect to
     target_address: String,
+
+    /// The username of the client
+    /// This is manually set before connection
     username: String,
 
+    /// The session reciver channel used to recive the ```ConnectionSession``` instance from the async connecting thread
     #[serde(skip)]
     session_reciver: Option<std::sync::mpsc::Receiver<ConnectionSession>>,
 
+    /// The list of the connected clients' username and last known cursor position
+    #[serde(skip)]
     connected_clients: HashMap<Uuid, (String, Pos2)>,
 
+    /// The current open session to the server available at the ```target_address```
     #[serde(skip)]
     current_session: Option<ConnectionSession>,
 }
 
+/// The current connection session to the remote address/server.
 pub struct ConnectionSession {
+    /// The ```CancellationToken``` to the threads ensuring connection to said server.
     pub connection_cancellation_token: CancellationToken,
 
+    /// The handle to the remote address.
     pub connection_handle: Arc<RwLock<Connection>>,
 
+    /// The send stream to the remote address.
+    /// This is used to send data to the server.
     pub send_stream: Arc<Mutex<SendStream>>,
 
+    /// The recive stream from the remote address.
+    /// This is used to recive data from the server.
     pub recv_stream: Arc<Mutex<RecvStream>>,
 
+    /// This ```Sender``` channel side is used to send the ```Pos2``` of the cursor to the sender thread (Cancellable via ```connection_cancellation_token```).
     pub pointer_sender_to_server: Sender<Pos2>,
 
+    /// This ```Reciver``` channel side is used to receive messages from the server (Cancellable via ```connection_cancellation_token```).
     pub message_reciver_from_server: tokio::sync::mpsc::Receiver<Message>,
 }
 
 impl ConnectionSession {
+    /// This function cancels the ```connection_cancellation_token``` ending all threads receiving or sending messages to the server.
     pub fn cancel_connection(&self) {
         self.connection_cancellation_token.cancel();
     }
 }
 
+/// This struct contains useful infromation about the current file session.
+/// This struct is initalized when opening a file, containing its properties.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct FileSession {
+    /// The ```PathBuf``` to the file.
     pub file_path: PathBuf,
+    /// The project's name.
     pub project_name: String,
+    /// The date this project was created (```NaiveDate```).
     pub project_created: NaiveDate,
 }
 
@@ -102,28 +126,51 @@ impl FileSession {
     }
 }
 
+/// This struct contains the properties of the whole application.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Application {
+    /// The ```Dockstate<TabType>``` of the application.
+    /// ```TabType``` is the types of tabs the application has.
     tree: DockState<TabType>,
+
+    /// This field contains all information related to the runtime.
+    /// This field does not inherently contain information which can directly affect the Application's runtime.
     context: ApplicationContext,
 
-    uuid: Uuid,
+    /// ```Uuid``` of the user who has opened this application.
+    /// A new ```Uuid``` instance is created whenever the application is opened.
+    #[serde(skip)]
+    uuid: ClientIdentificator,
+}
+
+/// This struct wraps the Uuid so that a custom default can be implemented for it.
+pub struct ClientIdentificator(Uuid);
+
+impl Default for ClientIdentificator {
+    fn default() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 impl Application {
+    /// Resets the application's state by replacing it with ```Application::default()```.
     pub fn reset(&mut self) {
         *self = Application::default();
     }
 }
 
+/// The types of tabs this application supports.
 #[derive(
     IntoStaticStr, Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq,
 )]
 pub enum TabType {
+    /// Used for showing the actual Canvas the user can paint at.
     Canvas,
+    /// Used for displaying the Brush's settings the user can paint on the canvas with.
     BrushSettings,
 }
 
+/// Custom certificate, this doesnt verify anything I should implement a working one.
 #[derive(Debug)]
 struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
 
@@ -133,6 +180,7 @@ impl SkipServerVerification {
     }
 }
 
+/// Trait implementation for the custom certificate struct
 impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     fn verify_server_cert(
         &self,
@@ -178,6 +226,9 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     }
 }
 
+/// This function connects to the ```target_address``` the client has provided.
+/// This function first sends a ```Message {msg_type: common_definitions::MessageType::Connecting(username), uuid}``` packet, which is then relayed to all connected clients.
+/// This way everyone can pair the username with the provided uuid.
 pub async fn connect_to_server(
     target_address: String,
     username: String,
@@ -203,7 +254,7 @@ pub async fn connect_to_server(
     //Send username
     send_stream
         .write_all(
-            &Message::to_serde_string(
+            &Message::new(
                 uuid,
                 common_definitions::MessageType::Connecting(username.clone()),
             )
@@ -220,15 +271,12 @@ pub async fn connect_to_server(
         recv_stream: recv_stream.clone(),
         connection_handle: Arc::new(RwLock::new(client)),
         pointer_sender_to_server: {
-            //Clone values so that they can be moved into the closure
             let (pos_sender, mut pos_reciver) = channel::<Pos2>(255);
             let connection_cancellation_token_clone = connection_cancellation_token.clone();
             let send_stream = send_stream.clone();
 
             tokio::spawn(async move {
                 loop {
-                    let uuid = uuid;
-
                     select! {
                         _ = tokio::time::sleep(Duration::from_secs(10)) => {
                             let mut server_handle = send_stream.lock().await;
@@ -256,6 +304,12 @@ pub async fn connect_to_server(
                         _ = connection_cancellation_token.cancelled() => break,
                         mut recv_stream = recv_stream.lock() => {
                             let message_length = recv_stream.read_u64().await.unwrap();
+
+                            if message_length > 128000000 {
+                                println!("Incoming message length too large, refusing to acknowledge.");
+
+                                continue;
+                            }
 
                             let mut message_buf = vec![0; message_length as usize];
 
@@ -296,19 +350,23 @@ impl Default for Application {
         Self {
             tree: dock_state,
             context,
-            uuid: Uuid::new_v4(),
+            uuid: ClientIdentificator::default(),
         }
     }
 }
 
+/// This struct contains all the ```BrushTypes``` with their own width (```f32```) and color (```Color32```)
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
-pub struct PaintBrush {
+pub struct PaintBrushes {
+    /// The current ```BrushType```.
     brush_type: BrushType,
+    /// The ```BrushType```-s' width.
     brush_width: [f32; BrushType::COUNT],
+    /// The ```BrushType```-s' color.
     brush_color: [Color32; BrushType::COUNT],
 }
 
-impl Default for PaintBrush {
+impl Default for PaintBrushes {
     fn default() -> Self {
         Self {
             brush_type: BrushType::default(),
@@ -318,7 +376,9 @@ impl Default for PaintBrush {
     }
 }
 
-impl PaintBrush {
+impl PaintBrushes {
+    /// Get current brush selected by the client.
+    /// This function converts the ```BrushType``` to a usize as every ```BrushType``` has its own width and color.
     pub fn get_current_brush(&self) -> (f32, Color32, BrushType) {
         (
             self.brush_width[self.brush_type as usize],
@@ -327,6 +387,7 @@ impl PaintBrush {
         )
     }
 
+    /// Get a mutable reference to the current brush and its properties.
     pub fn get_mut_current_brush(&mut self) -> (&mut f32, &mut Color32, &mut BrushType) {
         (
             &mut self.brush_width[self.brush_type as usize],
@@ -335,6 +396,7 @@ impl PaintBrush {
         )
     }
 
+    /// Get the nth brush and its properties.
     pub fn get_nth_brush(&self, nth: usize) -> (f32, Color32, BrushType) {
         (
             self.brush_width[nth],
@@ -344,6 +406,7 @@ impl PaintBrush {
     }
 }
 
+/// The types of brushes the client can use
 #[derive(
     serde::Serialize,
     serde::Deserialize,
@@ -376,6 +439,10 @@ impl Application {
     }
 }
 
+/// This function takes ```&mut <T>``` and extension_filter: ```&str```, so a ```FileDialog``` can be opened.
+/// This function reads the contents of the file specified by the FileDialog.
+/// After reading the contents, it automaticly ```serde::Serialize```-es to type ```<T>```.
+/// Then the ```&mut T``` is replaced with the new ```<T>``` handle.
 fn read_file_into_memory<T: for<'a> Deserialize<'a>>(
     memory: &mut T,
     extension_filter: &str,
@@ -392,6 +459,8 @@ fn read_file_into_memory<T: for<'a> Deserialize<'a>>(
 
     Ok(())
 }
+
+/// Displays an error ```MessageBox```
 fn display_error(err: impl ToString) {
     rfd::MessageDialog::new()
         .set_title("Error")
