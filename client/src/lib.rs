@@ -1,8 +1,7 @@
 pub const DRAWING_BOARD_IMAGE_EXT: &str = "dbimg";
 pub const DRAWING_BOARD_WORKSPACE_EXT: &str = "dbproject";
-
 use chrono::{Local, NaiveDate};
-use common_definitions::Message;
+use common_definitions::{BrushType, Message, MessageType, TabType, BRUSH_TYPE_COUNT};
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
@@ -21,7 +20,6 @@ use serde::Deserialize;
 use std::{
     collections::HashMap, fs, net::Ipv6Addr, path::PathBuf, str::FromStr, sync::Arc, time::Duration,
 };
-use strum::{EnumCount, IntoStaticStr};
 use tokio::{
     io::AsyncReadExt,
     select,
@@ -90,8 +88,8 @@ pub struct ConnectionSession {
     /// This is used to recive data from the server.
     pub recv_stream: Arc<Mutex<RecvStream>>,
 
-    /// This ```Sender``` channel side is used to send the ```Pos2``` of the cursor to the sender thread (Cancellable via ```connection_cancellation_token```).
-    pub pointer_sender_to_server: Sender<Pos2>,
+    /// This ```Sender``` channel side is used to send ```MessageType```-s to the sender thread (Cancellable via ```connection_cancellation_token```).
+    pub sender_to_server: Sender<MessageType>,
 
     /// This ```Reciver``` channel side is used to receive messages from the server (Cancellable via ```connection_cancellation_token```).
     pub message_reciver_from_server: tokio::sync::mpsc::Receiver<Message>,
@@ -157,17 +155,6 @@ impl Application {
     pub fn reset(&mut self) {
         *self = Application::default();
     }
-}
-
-/// The types of tabs this application supports.
-#[derive(
-    IntoStaticStr, Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq,
-)]
-pub enum TabType {
-    /// Used for showing the actual Canvas the user can paint at.
-    Canvas,
-    /// Used for displaying the Brush's settings the user can paint on the canvas with.
-    BrushSettings,
 }
 
 /// Custom certificate, this doesnt verify anything I should implement a working one.
@@ -270,8 +257,8 @@ pub async fn connect_to_server(
         send_stream: send_stream.clone(),
         recv_stream: recv_stream.clone(),
         connection_handle: Arc::new(RwLock::new(client)),
-        pointer_sender_to_server: {
-            let (pos_sender, mut pos_reciver) = channel::<Pos2>(255);
+        sender_to_server: {
+            let (pos_sender, mut pos_reciver) = channel::<MessageType>(255);
             let connection_cancellation_token_clone = connection_cancellation_token.clone();
             let send_stream = send_stream.clone();
 
@@ -283,10 +270,10 @@ pub async fn connect_to_server(
                             server_handle.write_all(&Message {uuid, msg_type: common_definitions::MessageType::KeepAlive}.into_sendable()).await.unwrap();
                         }
                         _ = connection_cancellation_token_clone.cancelled() => break,
-                        recv_pos = pos_reciver.recv() => {
-                            if let Some(pos) = recv_pos {
+                        recv_msg = pos_reciver.recv() => {
+                            if let Some(msg) = recv_msg {
                                 let mut server_handle = send_stream.lock().await;
-                                server_handle.write_all(&Message {uuid, msg_type: common_definitions::MessageType::CursorPosition(pos.x, pos.y)}.into_sendable()).await.unwrap();
+                                server_handle.write_all(&Message {uuid, msg_type: msg}.into_sendable()).await.unwrap();
                             }
                         }
                     }
@@ -361,16 +348,16 @@ pub struct PaintBrushes {
     /// The current ```BrushType```.
     brush_type: BrushType,
     /// The ```BrushType```-s' width.
-    brush_width: [f32; BrushType::COUNT],
+    brush_width: [f32; BRUSH_TYPE_COUNT],
     /// The ```BrushType```-s' color.
-    brush_color: [Color32; BrushType::COUNT],
+    brush_color: [Color32; BRUSH_TYPE_COUNT],
 }
 
 impl Default for PaintBrushes {
     fn default() -> Self {
         Self {
             brush_type: BrushType::default(),
-            brush_width: [1.0; BrushType::COUNT],
+            brush_width: [1.0; BRUSH_TYPE_COUNT],
             brush_color: Default::default(),
         }
     }
@@ -404,27 +391,6 @@ impl PaintBrushes {
             self.brush_type,
         )
     }
-}
-
-/// The types of brushes the client can use
-#[derive(
-    serde::Serialize,
-    serde::Deserialize,
-    Default,
-    PartialEq,
-    Clone,
-    Copy,
-    EnumCount,
-    IntoStaticStr,
-    Debug,
-)]
-pub enum BrushType {
-    None,
-    Graffiti,
-    Pencil,
-    #[default]
-    Marker,
-    Eraser,
 }
 
 impl Application {

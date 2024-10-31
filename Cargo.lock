@@ -853,8 +853,10 @@ dependencies = [
 name = "common_definitions"
 version = "0.1.0"
 dependencies = [
+ "egui",
  "serde",
  "serde_json",
+ "strum",
  "uuid",
 ]
 
@@ -1100,7 +1102,6 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "strum",
  "tokio",
  "tokio-util",
  "uuid",
@@ -1113,6 +1114,7 @@ dependencies = [
  "anyhow",
  "common_definitions",
  "dashmap",
+ "egui",
  "quinn",
  "rcgen",
  "serde",

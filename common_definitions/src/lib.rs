@@ -1,20 +1,65 @@
 use std::{fmt::Display, str::FromStr};
-
-use uuid::Uuid;
+use egui::{Color32, Pos2};
+use strum::{EnumCount, IntoStaticStr};
+pub use uuid::Uuid;
 
 /// The message types the client and the server can send.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum MessageType {
     /// This enum contains the list of the connected user's username
     ClientList(Vec<(String, Uuid)>),
-    /// This enum contains the username of the user who has their cursor's position at (f32, f32)
-    CursorPosition(f32, f32),
+    /// This enum contains the username of the user who has their cursor's position
+    CursorPosition(Pos2),
     /// This enum contains the username of the user who has connected to the server.
     Connecting(String),
     /// This enum indicated a user disconnect
     Disconnecting,
     /// This enum is used as a ```KeepAlive``` packet so that the `QUIC` connection doesn't time out.
     KeepAlive,
+
+    AddLine((Vec<Pos2>, (f32, Color32, BrushType))),
+    ModifyLine(ModifyLineData),
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ModifyLineData {
+    pub line_pos2: Vec<Pos2>,
+
+    pub line_modification: Option<(f32, Color32, BrushType)>
+}
+
+/// The types of brushes the client can display.
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Default,
+    PartialEq,
+    Clone,
+    Copy,
+    EnumCount,
+    IntoStaticStr,
+    Debug,
+)]
+pub enum BrushType {
+    None,
+    Graffiti,
+    Pencil,
+    #[default]
+    Marker,
+    Eraser,
+}
+
+pub const BRUSH_TYPE_COUNT: usize = BrushType::COUNT;
+
+/// The types of tabs this application supports.
+#[derive(
+    IntoStaticStr, Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq,
+)]
+pub enum TabType {
+    /// Used for showing the actual Canvas the user can paint at.
+    Canvas,
+    /// Used for displaying the Brush's settings the user can paint on the canvas with.
+    BrushSettings,
 }
 
 /// The message wrapper.

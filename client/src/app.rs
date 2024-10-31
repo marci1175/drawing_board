@@ -2,9 +2,10 @@ use std::{collections::HashMap, fs, sync::mpsc};
 
 use crate::{
     connect_to_server, display_error, read_file_into_memory, Application, ApplicationContext,
-    BrushType, ConnectionSession, FileSession, TabType, DRAWING_BOARD_IMAGE_EXT,
+    ConnectionSession, FileSession, TabType, DRAWING_BOARD_IMAGE_EXT,
     DRAWING_BOARD_WORKSPACE_EXT,
 };
+use common_definitions::BrushType;
 use egui::{
     emath::{self},
     vec2, Align2, CentralPanel, Color32, Context, FontId, Frame, Key, Modifiers, Pos2, Rect,
@@ -36,18 +37,19 @@ impl ApplicationContext {
                     ));
                 }
 
-                let current_line = self.lines.last_mut().unwrap();
+                let current_line_mut = self.lines.last_mut().unwrap();
+                let current_line = current_line_mut.clone();
 
                 if let Some(pointer_pos) = response.interact_pointer_pos() {
                     let canvas_pos = from_screen * pointer_pos;
-                    if current_line.0.last() != Some(&canvas_pos) {
-                        current_line.0.push(canvas_pos);
-                        current_line.1 = self
+                    if current_line_mut.0.last() != Some(&canvas_pos) {
+                        current_line_mut.0.push(canvas_pos);
+                        current_line_mut.1 = self
                             .paintbrush
                             .get_nth_brush(self.paintbrush.brush_type as usize);
                         response.mark_changed();
                     }
-                } else if !current_line.0.is_empty() {
+                } else if !current_line_mut.0.is_empty() {
                     self.lines.push((
                         vec![],
                         self.paintbrush
@@ -56,6 +58,14 @@ impl ApplicationContext {
 
                     if !self.undoer.is_in_flux() {
                         self.undoer.add_undo(&self.lines);
+                    }
+
+                    if let Some(current_session) = &self.connection.current_session {
+                        if let Err(err) = current_session.sender_to_server.try_send(common_definitions::MessageType::AddLine((current_line.0, current_line.1))) {
+                            dbg!(err);
+        
+                            self.connection.current_session = None;
+                        }
                     }
 
                     response.mark_changed();
@@ -494,7 +504,7 @@ impl eframe::App for Application {
                     ctx.request_repaint();
                 }
             });
-
+ 
         if let Some(reciver) = &self.context.connection.session_reciver {
             if let Ok(val) = reciver.try_recv() {
                 self.context.connection.current_session = Some(val);
@@ -511,14 +521,14 @@ impl eframe::App for Application {
                                 .map(|entry| (entry.1, (entry.0.clone(), Pos2::default()))),
                         )
                     }
-                    common_definitions::MessageType::CursorPosition(x, y) => {
+                    common_definitions::MessageType::CursorPosition(client_pos) => {
                         if let Some((_, pos)) = self
                             .context
                             .connection
                             .connected_clients
                             .get_mut(&message.uuid)
                         {
-                            *pos = Pos2::new(x, y);
+                            *pos = client_pos;
                         }
                     }
                     common_definitions::MessageType::Connecting(username) => {
@@ -536,6 +546,29 @@ impl eframe::App for Application {
 
                     //Acknowledge keepalive message
                     common_definitions::MessageType::KeepAlive => (),
+                    common_definitions::MessageType::AddLine(line_data) => {
+                        self.context.lines.push(line_data);
+
+                        self.context.lines.push((
+                            vec![],
+                            self.context.paintbrush
+                                .get_nth_brush(self.context.paintbrush.brush_type as usize),
+                        ));
+                    },
+                    common_definitions::MessageType::ModifyLine(modified_line_data) => {
+                        if let Some(idx) = self.context.lines.clone().iter().position(|line| line.0 == modified_line_data.line_pos2) {
+                            if let Some(line_modification) = modified_line_data.line_modification {
+                                self.context.lines[idx].1 = line_modification;
+                            }
+                            else {
+                                self.context.lines.remove(idx);
+                            }
+                        }
+                        else {
+                            //Sync with server
+
+                        }
+                    },
                 },
                 Err(err) => {
                     // dbg!(err);
@@ -545,7 +578,7 @@ impl eframe::App for Application {
             }
 
             if let Some(cur_pos) = ctx.pointer_latest_pos() {
-                if let Err(err) = session.pointer_sender_to_server.try_send(cur_pos) {
+                if let Err(err) = session.sender_to_server.try_send(common_definitions::MessageType::CursorPosition(cur_pos)) {
                     dbg!(err);
 
                     self.context.connection.current_session = None;

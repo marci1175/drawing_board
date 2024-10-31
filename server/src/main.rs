@@ -53,8 +53,9 @@ async fn main() -> anyhow::Result<()> {
             let incoming_client = rx.recv().await;
 
             if let Some(mut client) = incoming_client {
-                let username_buf =
-                    String::from_utf8(read_from_stream(&mut client.1).await).unwrap();
+                if let Ok(byte_buf) = read_from_stream(&mut client.1).await {
+                    let username_buf =
+                    String::from_utf8(byte_buf).unwrap();
 
                 let message = Message::from_str(&username_buf).unwrap();
                 let uuid = message.uuid;
@@ -108,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 spawn_client_listener(relay_sender.clone(), client.1);
+                }
             }
         }
     });
@@ -179,12 +181,12 @@ async fn main() -> anyhow::Result<()> {
 pub fn spawn_client_listener(relay: Sender<Message>, mut recv_stream: RecvStream) {
     tokio::spawn(async move {
         loop {
-            let message_buffer = read_from_stream(&mut recv_stream).await;
-
-            let message = Message::from_str(&String::from_utf8(message_buffer).unwrap()).unwrap();
+            if let Ok(message_buffer) = read_from_stream(&mut recv_stream).await {
+                let message = Message::from_str(&String::from_utf8(message_buffer).unwrap()).unwrap();
 
             if !matches!(message.msg_type, MessageType::KeepAlive) {
                 relay.send(message).unwrap();
+            }
             }
         }
     });
@@ -193,13 +195,14 @@ pub fn spawn_client_listener(relay: Sender<Message>, mut recv_stream: RecvStream
 /// This function reads from the ```recv_stream``` provided as an argument.
 /// It first reads a ```u64``` to decide the message's length after it reads `n` number of bytes (Indicated by the header).
 /// It returns the read bytes.
-async fn read_from_stream(recv_stream: &mut RecvStream) -> Vec<u8> {
-    let msg_length = recv_stream.read_u64().await.unwrap();
+async fn read_from_stream(recv_stream: &mut RecvStream) -> anyhow::Result<Vec<u8>> {
+    let msg_length = recv_stream.read_u64().await?;
 
     let mut message_buffer: Vec<u8> = vec![0; msg_length as usize];
 
-    recv_stream.read_exact(&mut message_buffer).await.unwrap();
-    message_buffer
+    recv_stream.read_exact(&mut message_buffer).await?;
+
+    Ok(message_buffer)
 }
 
 /// Creates a custom ```(ServerConfig, CertificateDer<'static>)``` instance. The Certificate is insecure.
