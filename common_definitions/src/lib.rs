@@ -1,6 +1,8 @@
 use egui::{Color32, Pos2};
+pub use indexmap::IndexMap;
 use std::{fmt::Display, str::FromStr};
 use strum::{EnumCount, IntoStaticStr};
+pub use typed_floats::NonNaN;
 pub use uuid::Uuid;
 
 /// The message types the client and the server can send.
@@ -17,17 +19,43 @@ pub enum MessageType {
     /// This enum is used as a ```KeepAlive``` packet so that the `QUIC` connection doesn't time out.
     KeepAlive,
 
-    AddLine((Vec<Pos2>, (f32, Color32, BrushType))),
-    ModifyLine((Vec<Pos2>, Option<(f32, Color32, BrushType)>)),
-    RequestSyncLine(Option<Vec<Pos2>>),
+    AddLine((Vec<LinePos>, (f32, Color32, BrushType))),
+    ModifyLine((Vec<LinePos>, Option<(f32, Color32, BrushType)>)),
+    RequestSyncLine(Option<Vec<LinePos>>),
 
     SyncLine(LineSyncType),
 }
 
+#[derive(
+    Debug, PartialEq, Eq, Hash, Clone, Copy, serde::Deserialize, serde::Serialize, PartialOrd, Ord,
+)]
+pub struct LinePos {
+    pub x: NonNaN<f32>,
+    pub y: NonNaN<f32>,
+}
+
+impl From<Pos2> for LinePos {
+    fn from(value: Pos2) -> Self {
+        Self {
+            x: NonNaN::<f32>::new(value.x).unwrap(),
+            y: NonNaN::<f32>::new(value.y).unwrap(),
+        }
+    }
+}
+
+impl Into<Pos2> for LinePos {
+    fn into(self) -> Pos2 {
+        Pos2 {
+            x: self.x.into(),
+            y: self.y.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum LineSyncType {
-    Full(Vec<(Vec<Pos2>, (f32, Color32, BrushType))>),
-    Partial(Option<(Vec<Pos2>, (f32, Color32, BrushType))>),
+    Full(IndexMap<Vec<LinePos>, (f32, Color32, BrushType)>),
+    Partial(Option<(Vec<LinePos>, (f32, Color32, BrushType))>),
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]

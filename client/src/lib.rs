@@ -1,7 +1,8 @@
 pub const DRAWING_BOARD_IMAGE_EXT: &str = "dbimg";
 pub const DRAWING_BOARD_WORKSPACE_EXT: &str = "dbproject";
 use chrono::{Local, NaiveDate};
-use common_definitions::{BrushType, Message, MessageType, TabType, BRUSH_TYPE_COUNT};
+use common_definitions::IndexMap;
+use common_definitions::{BrushType, LinePos, Message, MessageType, TabType, BRUSH_TYPE_COUNT};
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
@@ -32,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 mod app;
 
-pub type BrushMap = Vec<(Vec<Pos2>, (f32, Color32, BrushType))>;
+pub type BrushMap = IndexMap<Vec<LinePos>, (f32, Color32, BrushType)>;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct ApplicationContext {
@@ -41,7 +42,9 @@ pub struct ApplicationContext {
 
     file_session: Option<FileSession>,
 
+    #[serde(skip)]
     undoer: Undoer<BrushMap>,
+
     open_tabs: HashSet<TabType>,
 
     connection: ConnectionData,
@@ -244,6 +247,18 @@ pub async fn connect_to_server(
             &Message::new(
                 uuid,
                 common_definitions::MessageType::Connecting(username.clone()),
+            )
+            .into_sendable(),
+        )
+        .await
+        .unwrap();
+
+    send_stream
+        .write_all(
+            &Message::new(
+                uuid,
+                //Sync all the lines
+                common_definitions::MessageType::RequestSyncLine(None),
             )
             .into_sendable(),
         )

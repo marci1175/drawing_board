@@ -4,7 +4,7 @@ use crate::{
     connect_to_server, display_error, read_file_into_memory, Application, ApplicationContext,
     ConnectionSession, FileSession, TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT,
 };
-use common_definitions::BrushType;
+use common_definitions::{BrushType, LinePos};
 use egui::{
     emath::{self},
     vec2, Align2, CentralPanel, Color32, Context, FontId, Frame, Key, Modifiers, Pos2, Rect,
@@ -30,41 +30,49 @@ impl ApplicationContext {
             BrushType::Graffiti | BrushType::Pencil | BrushType::Marker => {
                 if self.paintbrush.get_current_brush().1.a() != 0 {
                     if self.lines.is_empty() {
-                        self.lines.push((
+                        self.lines.insert(
                             vec![],
                             self.paintbrush
                                 .get_nth_brush(self.paintbrush.brush_type as usize),
-                        ));
+                        );
                     }
-
-                    let current_line_mut = self.lines.last_mut().unwrap();
-                    let current_line = current_line_mut.clone();
-
+                    let last_line_entry = self.lines.last().unwrap();
                     if let Some(pointer_pos) = response.interact_pointer_pos() {
-                        let canvas_pos = from_screen * pointer_pos;
-                        if current_line_mut.0.last() != Some(&canvas_pos) {
-                            current_line_mut.0.push(canvas_pos);
-                            current_line_mut.1 = self
+                        let on_canvas_pointer_pos = from_screen * pointer_pos;
+
+                        if last_line_entry.0.last() != Some(&on_canvas_pointer_pos.into()) {
+                            let mut last_line_entry = self
+                                .lines
+                                .shift_remove_entry(self.lines.clone().last().unwrap().0)
+                                .unwrap();
+
+                            last_line_entry.0.push(on_canvas_pointer_pos.into());
+                            last_line_entry.1 = self
                                 .paintbrush
                                 .get_nth_brush(self.paintbrush.brush_type as usize);
+
+                            //Insert the modifed entry back into the IndexMap
+                            self.lines.insert(last_line_entry.0, last_line_entry.1);
+
                             response.mark_changed();
                         }
-                    } else if !current_line_mut.0.is_empty() {
-                        self.lines.push((
+                    } else if !last_line_entry.0.is_empty() {
+                        self.lines.insert(
                             vec![],
                             self.paintbrush
                                 .get_nth_brush(self.paintbrush.brush_type as usize),
-                        ));
+                        );
 
                         if !self.undoer.is_in_flux() {
                             self.undoer.add_undo(&self.lines);
                         }
 
                         if let Some(current_session) = &self.connection.current_session {
+                            let current_line = self.lines.last().unwrap();
                             if let Err(err) = current_session.sender_to_server.try_send(
                                 common_definitions::MessageType::AddLine((
-                                    current_line.0,
-                                    current_line.1,
+                                    current_line.0.to_vec(),
+                                    current_line.1.clone(),
                                 )),
                             ) {
                                 dbg!(err);
@@ -94,13 +102,14 @@ impl ApplicationContext {
 
                         for line_pos in lines_pos {
                             let current_rect = Rect::from_center_size(
-                                to_screen * *line_pos,
+                                to_screen * (*line_pos).into(),
                                 vec2(*line_width + brush_width, *line_width + brush_width),
                             );
                             let rect = last_rect.union(current_rect);
 
                             if rect.contains(pointer_pos) {
-                                self.lines.remove(line_idx);
+                                self.lines.shift_remove_index(line_idx);
+
                                 self.undoer.add_undo(&self.lines);
 
                                 response.mark_changed();
@@ -135,41 +144,25 @@ impl ApplicationContext {
     }
 }
 
-/// This function draws a line ((Vec<Pos2>, (f32, Color32, BrushType))) to the screen.
+/// This function draws a line ((Vec<LinePos>, (f32, Color32, BrushType))) to the screen.
 fn draw_line_to_screen_with_brush(
-    line: &(Vec<Pos2>, (f32, Color32, BrushType)),
+    line: (&Vec<LinePos>, &(f32, Color32, BrushType)),
     to_screen: emath::RectTransform,
 ) -> egui::Shape {
-    let points: Vec<Pos2> = line.0.iter().map(|p| to_screen * *p).collect();
+    let points: Vec<Pos2> = line.0.iter().map(|p| to_screen * (*p).into()).collect();
     let (width, color, brush_type) = line.1;
 
     match brush_type {
         BrushType::Pencil => egui::Shape::Vec(egui::Shape::dashed_line(
             &points,
-            Stroke::new(width, color),
-            width,
-            width,
+            Stroke::new(*width, *color),
+            *width,
+            *width,
         )),
-        BrushType::Marker => egui::Shape::line(points, Stroke::new(width, color)),
+        BrushType::Marker => egui::Shape::line(points, Stroke::new(*width, *color)),
         BrushType::Graffiti => egui::Shape::Noop,
         BrushType::Eraser => egui::Shape::Noop,
         BrushType::None => egui::Shape::Noop,
-    }
-}
-fn _draw_line_with_brush(line: &(Vec<Pos2>, (f32, Color32, BrushType))) -> egui::Shape {
-    let (width, color, brush_type) = line.1;
-
-    match brush_type {
-        BrushType::Pencil => egui::Shape::Vec(egui::Shape::dashed_line(
-            &line.0,
-            Stroke::new(width, color),
-            width,
-            width,
-        )),
-        BrushType::Marker => egui::Shape::line(line.0.clone(), Stroke::new(width, color)),
-        BrushType::Eraser => egui::Shape::Noop,
-        BrushType::None => egui::Shape::Noop,
-        BrushType::Graffiti => egui::Shape::Noop,
     }
 }
 
@@ -452,14 +445,15 @@ impl eframe::App for Application {
                             );
 
                             if ui.button("Disconnect").clicked() {
+                                //Reset connection state
                                 connection_session.cancel_connection();
-
+                                self.context.lines.clear();
+                                self.context.connection.connected_clients.clear();
+                                self.context.connection.session_reciver = None;
                                 self.context.connection.current_session = None;
                             }
                         }
                     } else if ui.button("Connect").clicked() {
-                        self.context.lines.clear();
-
                         let (sender, reciver) = mpsc::channel::<ConnectionSession>();
                         let target_address = self.context.connection.target_address.clone();
                         let username = self.context.connection.username.clone();
@@ -515,12 +509,15 @@ impl eframe::App for Application {
         if let Some(reciver) = &self.context.connection.session_reciver {
             if let Ok(val) = reciver.try_recv() {
                 self.context.connection.current_session = Some(val);
+
+                //Clear lines on successful connection
+                self.context.lines.clear();
             }
         }
 
         if let Some(session) = self.context.connection.current_session.as_mut() {
-            match session.message_reciver_from_server.try_recv() {
-                Ok(message) => match message.msg_type {
+            while let Ok(message) = session.message_reciver_from_server.try_recv() {
+                match message.msg_type {
                     common_definitions::MessageType::ClientList(clients) => {
                         self.context.connection.connected_clients = HashMap::from_iter(
                             clients
@@ -554,14 +551,14 @@ impl eframe::App for Application {
                     //Acknowledge keepalive message
                     common_definitions::MessageType::KeepAlive => (),
                     common_definitions::MessageType::AddLine(line_data) => {
-                        self.context.lines.push(line_data);
+                        self.context.lines.insert(line_data.0, line_data.1);
 
-                        self.context.lines.push((
+                        self.context.lines.insert(
                             vec![],
                             self.context
                                 .paintbrush
                                 .get_nth_brush(self.context.paintbrush.brush_type as usize),
-                        ));
+                        );
                     }
                     common_definitions::MessageType::ModifyLine((pos, props)) => {
                         if let Some(idx) = self
@@ -569,12 +566,12 @@ impl eframe::App for Application {
                             .lines
                             .clone()
                             .iter()
-                            .position(|line| line.0 == pos)
+                            .position(|line| *line.0 == pos)
                         {
                             if let Some(line_modification) = props {
-                                self.context.lines[idx].1 = line_modification;
+                                self.context.lines[idx].1 = line_modification.1;
                             } else {
-                                self.context.lines.remove(idx);
+                                self.context.lines.swap_remove_index(idx);
                             }
                         } else {
                             session
@@ -594,19 +591,16 @@ impl eframe::App for Application {
                                 self.context.lines = server_lines
                             }
                             common_definitions::LineSyncType::Partial(line) => match line {
-                                Some(line) => self.context.lines.push(line),
+                                Some(line) => {
+                                    self.context.lines.insert(line.0, line.1);
+                                }
                                 None => {
                                     eprintln!("Server/Client desync, another client requested the modification of a line that doesn't exist on the server's side.");
                                 }
                             },
                         }
                     }
-                },
-                Err(err) => {
-                    // dbg!(err);
-
-                    // self.context.connection.current_session = None;
-                }
+                };
             }
 
             if let Some(cur_pos) = ctx.pointer_latest_pos() {
