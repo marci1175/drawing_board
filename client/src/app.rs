@@ -8,7 +8,7 @@ use common_definitions::BrushType;
 use egui::{
     emath::{self},
     vec2, Align2, CentralPanel, Color32, Context, FontId, Frame, Key, Modifiers, Pos2, Rect,
-    RichText, Sense, Stroke, TopBottomPanel, Ui,
+    RichText, Sense, Stroke, TopBottomPanel, Ui, Vec2,
 };
 use egui_dock::{DockArea, TabViewer};
 
@@ -501,7 +501,7 @@ impl eframe::App for Application {
                         Stroke::new(1., Color32::WHITE),
                     );
                     ui.painter().text(
-                        *cursor_pos * 1.1,
+                        *cursor_pos + Vec2::new(50., 30.),
                         Align2::CENTER_CENTER,
                         username,
                         FontId::monospace(20.),

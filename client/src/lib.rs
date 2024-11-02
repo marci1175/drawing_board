@@ -270,8 +270,6 @@ pub async fn connect_to_server(
                             server_handle.write_all(&Message {uuid, msg_type: common_definitions::MessageType::KeepAlive}.into_sendable()).await.unwrap();
                         }
                         _ = connection_cancellation_token_clone.cancelled() => {
-                            println!("asd");
-
                             break
                         },
                         recv_msg = pos_reciver.recv() => {
