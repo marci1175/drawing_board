@@ -269,7 +269,11 @@ pub async fn connect_to_server(
                             let mut server_handle = send_stream.lock().await;
                             server_handle.write_all(&Message {uuid, msg_type: common_definitions::MessageType::KeepAlive}.into_sendable()).await.unwrap();
                         }
-                        _ = connection_cancellation_token_clone.cancelled() => break,
+                        _ = connection_cancellation_token_clone.cancelled() => {
+                            println!("asd");
+
+                            break
+                        },
                         recv_msg = pos_reciver.recv() => {
                             if let Some(msg) = recv_msg {
                                 let mut server_handle = send_stream.lock().await;
@@ -288,21 +292,30 @@ pub async fn connect_to_server(
             tokio::spawn(async move {
                 loop {
                     select! {
-                        _ = connection_cancellation_token.cancelled() => break,
+                        _ = connection_cancellation_token.cancelled() => {
+                            break
+                        },
                         mut recv_stream = recv_stream.lock() => {
-                            let message_length = recv_stream.read_u64().await.unwrap();
+                            match recv_stream.read_u64().await {
+                                Ok(message_length) => {
+                                    if message_length > 128000000 {
+                                        println!("Incoming message length too large, refusing to acknowledge.");
 
-                            if message_length > 128000000 {
-                                println!("Incoming message length too large, refusing to acknowledge.");
+                                        continue;
+                                    }
 
-                                continue;
+                                    let mut message_buf = vec![0; message_length as usize];
+
+                                    recv_stream.read_exact(&mut message_buf).await.unwrap();
+
+                                    if let Err(_) = msg_sender.send(Message::from_str(&String::from_utf8(message_buf).unwrap()).unwrap()).await {
+                                        eprintln!("Message sent on closed channel, if the client has disconnected this is expected");
+                                    };
+                                },
+                                Err(err) => {
+                                    dbg!(err);
+                                },
                             }
-
-                            let mut message_buf = vec![0; message_length as usize];
-
-                            recv_stream.read_exact(&mut message_buf).await.unwrap();
-
-                            msg_sender.send(Message::from_str(&String::from_utf8(message_buf).unwrap()).unwrap()).await.unwrap();
                         }
                     }
                 }

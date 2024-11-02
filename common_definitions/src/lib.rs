@@ -1,5 +1,5 @@
-use std::{fmt::Display, str::FromStr};
 use egui::{Color32, Pos2};
+use std::{fmt::Display, str::FromStr};
 use strum::{EnumCount, IntoStaticStr};
 pub use uuid::Uuid;
 
@@ -18,14 +18,23 @@ pub enum MessageType {
     KeepAlive,
 
     AddLine((Vec<Pos2>, (f32, Color32, BrushType))),
-    ModifyLine(ModifyLineData),
+    ModifyLine((Vec<Pos2>, Option<(f32, Color32, BrushType)>)),
+    RequestSyncLine(Option<Vec<Pos2>>),
+
+    SyncLine(LineSyncType),
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct ModifyLineData {
+pub enum LineSyncType {
+    Full(Vec<(Vec<Pos2>, (f32, Color32, BrushType))>),
+    Partial(Option<(Vec<Pos2>, (f32, Color32, BrushType))>),
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct LineData {
     pub line_pos2: Vec<Pos2>,
 
-    pub line_modification: Option<(f32, Color32, BrushType)>
+    pub line_modification: Option<(f32, Color32, BrushType)>,
 }
 
 /// The types of brushes the client can display.
@@ -79,9 +88,9 @@ impl Message {
 }
 
 impl FromStr for Message {
-    type Err = Box<dyn std::error::Error>;
+    type Err = serde_json::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(serde_json::from_str(s)?)
+        serde_json::from_str(s)
     }
 }
 

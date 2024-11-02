@@ -1090,6 +1090,7 @@ dependencies = [
  "chrono",
  "common_definitions",
  "console-subscriber",
+ "dashmap",
  "eframe",
  "egui",
  "egui_dock",
