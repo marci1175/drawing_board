@@ -1,12 +1,13 @@
 pub const DRAWING_BOARD_IMAGE_EXT: &str = "dbimg";
 pub const DRAWING_BOARD_WORKSPACE_EXT: &str = "dbproject";
 use chrono::{Local, NaiveDate};
-use common_definitions::IndexMap;
+use common_definitions::CancellationToken;
+use common_definitions::{Brush, IndexMap, PointerProperties};
 use common_definitions::{BrushType, LinePos, Message, MessageType, TabType, BRUSH_TYPE_COUNT};
 use egui::{
     ahash::{HashSet, HashSetExt},
     util::undoer::Undoer,
-    Color32, Pos2,
+    Color32,
 };
 use egui_dock::{DockState, SurfaceIndex};
 use quinn::{
@@ -29,11 +30,10 @@ use tokio::{
         Mutex, RwLock,
     },
 };
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 mod app;
 
-pub type BrushMap = IndexMap<Vec<LinePos>, (f32, Color32, BrushType)>;
+pub type BrushMap = IndexMap<Vec<LinePos>, Brush>;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct ApplicationContext {
@@ -68,7 +68,7 @@ pub struct ConnectionData {
 
     /// The list of the connected clients' username and last known cursor position
     #[serde(skip)]
-    connected_clients: HashMap<Uuid, (String, Pos2)>,
+    connected_clients: HashMap<Uuid, (String, PointerProperties)>,
 
     /// The current open session to the server available at the ```target_address```
     #[serde(skip)]
@@ -273,7 +273,7 @@ pub async fn connect_to_server(
         recv_stream: recv_stream.clone(),
         connection_handle: Arc::new(RwLock::new(client)),
         sender_to_server: {
-            let (pos_sender, mut pos_reciver) = channel::<MessageType>(255);
+            let (msg_sender, mut msg_reciver) = channel::<MessageType>(255);
             let connection_cancellation_token_clone = connection_cancellation_token.clone();
             let send_stream = send_stream.clone();
 
@@ -287,7 +287,7 @@ pub async fn connect_to_server(
                         _ = connection_cancellation_token_clone.cancelled() => {
                             break
                         },
-                        recv_msg = pos_reciver.recv() => {
+                        recv_msg = msg_reciver.recv() => {
                             if let Some(msg) = recv_msg {
                                 let mut server_handle = send_stream.lock().await;
                                 server_handle.write_all(&Message {uuid, msg_type: msg}.into_sendable()).await.unwrap();
@@ -297,7 +297,7 @@ pub async fn connect_to_server(
                 }
             });
 
-            pos_sender
+            msg_sender
         },
         message_reciver_from_server: {
             let (msg_sender, msg_reciver) = channel::<Message>(255);
@@ -321,12 +321,14 @@ pub async fn connect_to_server(
 
                                     recv_stream.read_exact(&mut message_buf).await.unwrap();
 
-                                    if let Err(_) = msg_sender.send(Message::from_str(&String::from_utf8(message_buf).unwrap()).unwrap()).await {
-                                        eprintln!("Message sent on closed channel, if the client has disconnected this is expected");
+                                    if let Err(_err) = msg_sender.send(Message::from_str(&String::from_utf8(message_buf).unwrap()).unwrap()).await {
+                                        eprintln!("Message sent on closed channel, if the client has disconnected this is expected: {_err}");
                                     };
                                 },
                                 Err(err) => {
                                     dbg!(err);
+
+                                    panic!();
                                 },
                             }
                         }
@@ -392,7 +394,7 @@ impl Default for PaintBrushes {
 impl PaintBrushes {
     /// Get current brush selected by the client.
     /// This function converts the ```BrushType``` to a usize as every ```BrushType``` has its own width and color.
-    pub fn get_current_brush(&self) -> (f32, Color32, BrushType) {
+    pub fn get_current_brush(&self) -> Brush {
         (
             self.brush_width[self.brush_type as usize],
             self.brush_color[self.brush_type as usize],
@@ -410,7 +412,7 @@ impl PaintBrushes {
     }
 
     /// Get the nth brush and its properties.
-    pub fn get_nth_brush(&self, nth: usize) -> (f32, Color32, BrushType) {
+    pub fn get_nth_brush(&self, nth: usize) -> Brush {
         (
             self.brush_width[nth],
             self.brush_color[nth],

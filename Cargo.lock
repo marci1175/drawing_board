@@ -858,6 +858,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
+ "tokio-util",
  "typed_floats",
  "uuid",
 ]
@@ -1106,7 +1107,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "typed_floats",
  "uuid",
 ]

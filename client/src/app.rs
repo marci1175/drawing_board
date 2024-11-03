@@ -4,7 +4,7 @@ use crate::{
     connect_to_server, display_error, read_file_into_memory, Application, ApplicationContext,
     ConnectionSession, FileSession, TabType, DRAWING_BOARD_IMAGE_EXT, DRAWING_BOARD_WORKSPACE_EXT,
 };
-use common_definitions::{BrushType, LinePos};
+use common_definitions::{Brush, BrushType, LinePos, PointerProperties};
 use egui::{
     emath::{self},
     vec2, Align2, CentralPanel, Color32, Context, FontId, Frame, Key, Modifiers, Pos2, Rect,
@@ -55,6 +55,20 @@ impl ApplicationContext {
                             self.lines.insert(last_line_entry.0, last_line_entry.1);
 
                             response.mark_changed();
+
+                            if let Some(current_session) = &self.connection.current_session {
+                                let current_line = self.lines.last().unwrap();
+                                if let Err(err) = current_session.sender_to_server.try_send(
+                                    common_definitions::MessageType::AddLine((
+                                        current_line.0.to_vec(),
+                                        *current_line.1,
+                                    )),
+                                ) {
+                                    dbg!(err);
+
+                                    self.connection.current_session = None;
+                                }
+                            }
                         }
                     } else if !last_line_entry.0.is_empty() {
                         self.lines.insert(
@@ -65,20 +79,6 @@ impl ApplicationContext {
 
                         if !self.undoer.is_in_flux() {
                             self.undoer.add_undo(&self.lines);
-                        }
-
-                        if let Some(current_session) = &self.connection.current_session {
-                            let current_line = self.lines.last().unwrap();
-                            if let Err(err) = current_session.sender_to_server.try_send(
-                                common_definitions::MessageType::AddLine((
-                                    current_line.0.to_vec(),
-                                    current_line.1.clone(),
-                                )),
-                            ) {
-                                dbg!(err);
-
-                                self.connection.current_session = None;
-                            }
                         }
 
                         response.mark_changed();
@@ -144,9 +144,9 @@ impl ApplicationContext {
     }
 }
 
-/// This function draws a line ((Vec<LinePos>, (f32, Color32, BrushType))) to the screen.
+/// This function draws a line ((Vec<LinePos>, Brush)) to the screen.
 fn draw_line_to_screen_with_brush(
-    line: (&Vec<LinePos>, &(f32, Color32, BrushType)),
+    line: (&Vec<LinePos>, &Brush),
     to_screen: emath::RectTransform,
 ) -> egui::Shape {
     let points: Vec<Pos2> = line.0.iter().map(|p| to_screen * (*p).into()).collect();
@@ -240,24 +240,34 @@ impl TabViewer for ApplicationContext {
                             BrushType::Eraser,
                             "Eraser",
                         );
+                        ui.selectable_value(
+                            &mut self.paintbrush.brush_type,
+                            BrushType::None,
+                            "None",
+                        );
                     });
                 });
 
                 ui.separator();
 
-                ui.horizontal(|ui| {
-                    ui.label("Color");
-                    self.color_picker(ui);
-                });
+                //The `BrushType`-s which properties cannot be changed
+                if !matches!(self.paintbrush.get_current_brush().2, BrushType::None)
+                    && !matches!(self.paintbrush.get_current_brush().2, BrushType::Eraser)
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("Color");
+                        self.color_picker(ui);
+                    });
 
-                ui.label("Width");
-                ui.add(
-                    egui::Slider::new(
-                        &mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize],
-                        1.0..=100.0,
-                    )
-                    .step_by(0.2),
-                );
+                    ui.label("Width");
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize],
+                            1.0..=100.0,
+                        )
+                        .step_by(0.2),
+                    );
+                }
 
                 ui.separator();
 
@@ -486,16 +496,19 @@ impl eframe::App for Application {
                     .show_window_close_buttons(true)
                     .show_inside(ui, &mut self.context);
 
-                for (_, (username, cursor_pos)) in self.context.connection.connected_clients.iter()
+                for (_, (username, pointer_properties)) in
+                    self.context.connection.connected_clients.iter()
                 {
+                    let cursor_pos = pointer_properties.pointer_pos;
+
                     ui.painter().circle(
-                        *cursor_pos,
+                        cursor_pos,
                         15.,
                         Color32::WHITE,
                         Stroke::new(1., Color32::WHITE),
                     );
                     ui.painter().text(
-                        *cursor_pos + Vec2::new(50., 30.),
+                        cursor_pos + Vec2::new(50., 30.),
                         Align2::CENTER_CENTER,
                         username,
                         FontId::monospace(20.),
@@ -519,11 +532,10 @@ impl eframe::App for Application {
             while let Ok(message) = session.message_reciver_from_server.try_recv() {
                 match message.msg_type {
                     common_definitions::MessageType::ClientList(clients) => {
-                        self.context.connection.connected_clients = HashMap::from_iter(
-                            clients
-                                .iter()
-                                .map(|entry| (entry.1, (entry.0.clone(), Pos2::default()))),
-                        )
+                        self.context.connection.connected_clients =
+                            HashMap::from_iter(clients.iter().map(|entry| {
+                                (entry.1, (entry.0.clone(), PointerProperties::default()))
+                            }))
                     }
                     common_definitions::MessageType::CursorPosition(client_pos) => {
                         if let Some((_, pos)) = self
@@ -539,7 +551,7 @@ impl eframe::App for Application {
                         self.context
                             .connection
                             .connected_clients
-                            .insert(message.uuid, (username, Pos2::default()));
+                            .insert(message.uuid, (username, PointerProperties::default()));
                     }
                     common_definitions::MessageType::Disconnecting => {
                         self.context
@@ -552,13 +564,6 @@ impl eframe::App for Application {
                     common_definitions::MessageType::KeepAlive => (),
                     common_definitions::MessageType::AddLine(line_data) => {
                         self.context.lines.insert(line_data.0, line_data.1);
-
-                        self.context.lines.insert(
-                            vec![],
-                            self.context
-                                .paintbrush
-                                .get_nth_brush(self.context.paintbrush.brush_type as usize),
-                        );
                     }
                     common_definitions::MessageType::ModifyLine((pos, props)) => {
                         if let Some(idx) = self
@@ -604,10 +609,12 @@ impl eframe::App for Application {
             }
 
             if let Some(cur_pos) = ctx.pointer_latest_pos() {
-                if let Err(err) = session
-                    .sender_to_server
-                    .try_send(common_definitions::MessageType::CursorPosition(cur_pos))
-                {
+                if let Err(err) = session.sender_to_server.try_send(
+                    common_definitions::MessageType::CursorPosition(PointerProperties {
+                        pointer_pos: cur_pos,
+                        brush: self.context.paintbrush.get_current_brush(),
+                    }),
+                ) {
                     dbg!(err);
 
                     self.context.connection.current_session = None;

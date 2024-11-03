@@ -1,19 +1,23 @@
 use std::{
     net::{Ipv6Addr, SocketAddr, SocketAddrV6},
-    str::FromStr,
     sync::Arc,
 };
 
-use common_definitions::{LinePos, Message, MessageType};
+use common_definitions::{CancellationToken, Message, MessageType};
 use dashmap::DashMap;
 use drawing_board_server::{
-    bytes_into_message, configure_server, read_from_stream, relay_message, Client, ServerState,
+    bytes_into_message, configure_server, read_from_stream, spawn_client_listener,
+    spawn_client_sender, Client, ServerState,
 };
 use quinn::{Endpoint, RecvStream, SendStream};
 use tokio::sync::{
-    broadcast::{self, Receiver, Sender},
+    broadcast::{self},
     mpsc::{self, channel},
 };
+
+/* TODO:
+    implement tracing / logging.
+*/
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -33,16 +37,23 @@ async fn main() -> anyhow::Result<()> {
 
     let (sx, mut rx) = mpsc::channel::<(SendStream, RecvStream, SocketAddr)>(10);
 
+    // Create the relay channel pair
+    // This is used to broadcast a message to all of the clients.
     let (relay_sender, relay_reciver) = broadcast::channel::<Message>(100);
 
+    // This channel is used to send messages to the canvas writer, which writes information to the server's internal storage
     let (canvas_sender, mut canvas_receiver) = channel::<MessageType>(1000);
 
+    // Create a `ServerState` instance to store the servers state
     let server_state = ServerState {
         client_list: Arc::new(DashMap::new()),
         canvas: Arc::new(DashMap::new()),
     };
 
+    //Clone the client list's handle
     let client_list_clone = server_state.client_list.clone();
+
+    //Clone the server_state variable
     let server_state_clone = server_state.clone();
 
     tokio::spawn(async move {
@@ -50,19 +61,15 @@ async fn main() -> anyhow::Result<()> {
             if let Some(message) = canvas_receiver.recv().await {
                 match message {
                     MessageType::AddLine((pos, props)) => {
-                        server_state
-                            .canvas
-                            .insert(pos.iter().map(|pos| LinePos::from(*pos)).collect(), props);
+                        server_state.canvas.insert(pos.to_vec(), props);
                     }
                     MessageType::ModifyLine((pos, line_property_change)) => {
                         match line_property_change {
                             // The line gets modified
                             Some(props) => {
-                                if let Some(mut line_props) = server_state.canvas.get_mut(
-                                    &pos.iter()
-                                        .map(|pos| LinePos::from(*pos))
-                                        .collect::<Vec<LinePos>>(),
-                                ) {
+                                if let Some(mut line_props) =
+                                    server_state.canvas.get_mut(&pos.to_vec())
+                                {
                                     let line_props = line_props.value_mut();
 
                                     *line_props = props;
@@ -72,11 +79,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                             // The line gets deleted
                             None => {
-                                server_state.canvas.remove(
-                                    &pos.iter()
-                                        .map(|pos| LinePos::from(*pos))
-                                        .collect::<Vec<LinePos>>(),
-                                );
+                                server_state.canvas.remove(&pos.to_vec());
                             }
                         }
                     }
@@ -97,7 +100,9 @@ async fn main() -> anyhow::Result<()> {
             if let Some(client) = incoming_client {
                 let (mut send_stream, mut recv_stream, client_address) = client;
 
+                //Read `n` number of bytes from the stream
                 if let Ok(byte_buf) = read_from_stream(&mut recv_stream).await {
+                    //Convert a list of bytes into a `Message`
                     match bytes_into_message(byte_buf) {
                         Ok(message) => {
                             let uuid = message.uuid;
@@ -132,22 +137,29 @@ async fn main() -> anyhow::Result<()> {
                                 },
                             );
 
+                            //Create client exlusive channels these are used to send messages to the client who has created this set of channels exclusively
                             let (client_exclusive_sender, client_exclusive_listener) =
                                 channel::<MessageType>(100);
 
+                            //Create a cancellation token so that if either the listener or the sender fail it will shut down both threads.
+                            let client_cancellation_token = CancellationToken::new();
+
+                            // Spawn client listener thread
                             spawn_client_listener(
                                 relay_sender.clone(),
                                 recv_stream,
                                 canvas_sender.clone(),
                                 client_exclusive_sender,
+                                client_cancellation_token.clone(),
                             );
 
-                            //Spawn relay thread
+                            //Spawn cleint relay thread
                             spawn_client_sender(
                                 relay_reciver.resubscribe(),
                                 send_stream,
                                 client_exclusive_listener,
                                 server_state_clone.clone(),
+                                client_cancellation_token,
                             );
                         }
                         Err(err) => {
@@ -186,61 +198,4 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap();
         });
     }
-}
-
-pub fn spawn_client_sender(
-    relay: Receiver<Message>,
-    send_stream: SendStream,
-    client_exclusive_reciver: tokio::sync::mpsc::Receiver<MessageType>,
-    server_state: ServerState,
-) {
-    tokio::spawn(async move {
-        if let Err(err) =
-            relay_message(relay, send_stream, client_exclusive_reciver, server_state).await
-        {
-            panic!("Client disconnected: {err}");
-        }
-    });
-}
-
-/// This function creates a listener thread, from the ```recv_stream``` provided as an argument.
-/// All recived messages are sent to the relay (```Sender<Message>```) channel so that the relay thread can realy the message to all of the clients.
-pub fn spawn_client_listener(
-    relay: Sender<Message>,
-    mut recv_stream: RecvStream,
-    canvas_sender: tokio::sync::mpsc::Sender<MessageType>,
-    client_exclusive_sender: tokio::sync::mpsc::Sender<MessageType>,
-) {
-    tokio::spawn(async move {
-        loop {
-            if let Ok(message_buffer) = read_from_stream(&mut recv_stream).await {
-                let message =
-                    Message::from_str(&String::from_utf8(message_buffer).unwrap()).unwrap();
-
-                match message.msg_type.clone() {
-                    MessageType::ClientList(_)
-                    | MessageType::CursorPosition(_)
-                    | MessageType::Connecting(_)
-                    | MessageType::Disconnecting => {
-                        relay.send(message).unwrap();
-                    }
-                    MessageType::ModifyLine(_) | MessageType::AddLine(_) => {
-                        canvas_sender.send(message.msg_type.clone()).await.unwrap();
-                        relay.send(message).unwrap();
-                    }
-                    MessageType::KeepAlive => (),
-
-                    MessageType::RequestSyncLine(_) => {
-                        client_exclusive_sender
-                            .send(message.msg_type)
-                            .await
-                            .unwrap();
-                    }
-                    MessageType::SyncLine(_) => {
-                        unimplemented!("The client can't send this message")
-                    }
-                }
-            }
-        }
-    });
 }

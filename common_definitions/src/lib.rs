@@ -2,16 +2,21 @@ use egui::{Color32, Pos2};
 pub use indexmap::IndexMap;
 use std::{fmt::Display, str::FromStr};
 use strum::{EnumCount, IntoStaticStr};
+// Reimports
+pub use tokio_util::sync::CancellationToken;
 pub use typed_floats::NonNaN;
 pub use uuid::Uuid;
+
+// Type definitions
+pub type Brush = (f32, Color32, BrushType);
 
 /// The message types the client and the server can send.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum MessageType {
     /// This enum contains the list of the connected user's username
     ClientList(Vec<(String, Uuid)>),
-    /// This enum contains the username of the user who has their cursor's position
-    CursorPosition(Pos2),
+    /// This enum contains the connected user's PointerProperties
+    CursorPosition(PointerProperties),
     /// This enum contains the username of the user who has connected to the server.
     Connecting(String),
     /// This enum indicated a user disconnect
@@ -19,11 +24,17 @@ pub enum MessageType {
     /// This enum is used as a ```KeepAlive``` packet so that the `QUIC` connection doesn't time out.
     KeepAlive,
 
-    AddLine((Vec<LinePos>, (f32, Color32, BrushType))),
-    ModifyLine((Vec<LinePos>, Option<(f32, Color32, BrushType)>)),
+    AddLine((Vec<LinePos>, Brush)),
+    ModifyLine((Vec<LinePos>, Option<Brush>)),
     RequestSyncLine(Option<Vec<LinePos>>),
 
     SyncLine(LineSyncType),
+}
+
+#[derive(Default, Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PointerProperties {
+    pub pointer_pos: Pos2,
+    pub brush: Brush,
 }
 
 #[derive(
@@ -43,26 +54,26 @@ impl From<Pos2> for LinePos {
     }
 }
 
-impl Into<Pos2> for LinePos {
-    fn into(self) -> Pos2 {
+impl From<LinePos> for Pos2 {
+    fn from(val: LinePos) -> Self {
         Pos2 {
-            x: self.x.into(),
-            y: self.y.into(),
+            x: val.x.into(),
+            y: val.y.into(),
         }
     }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum LineSyncType {
-    Full(IndexMap<Vec<LinePos>, (f32, Color32, BrushType)>),
-    Partial(Option<(Vec<LinePos>, (f32, Color32, BrushType))>),
+    Full(IndexMap<Vec<LinePos>, Brush>),
+    Partial(Option<(Vec<LinePos>, Brush)>),
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct LineData {
     pub line_pos2: Vec<Pos2>,
 
-    pub line_modification: Option<(f32, Color32, BrushType)>,
+    pub line_modification: Option<Brush>,
 }
 
 /// The types of brushes the client can display.
@@ -124,7 +135,13 @@ impl FromStr for Message {
 
 impl Display for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&serde_json::to_string(self).unwrap())
+        f.write_str(&match serde_json::to_string(self) {
+            Ok(string) => string,
+            Err(err) => {
+                dbg!(self);
+                panic!("{err}");
+            }
+        })
     }
 }
 
