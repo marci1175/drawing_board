@@ -5,8 +5,8 @@ Features:
   - Drawings easily exportable as .png
   - Saveable workspaces / canvases
 
-### Techstack
+### Techstack 👨‍💻
 Tools / libraries the Drawing Board application uses:
-Frontend: egui
-Backend: tokio-rs
-Networking: quinn (A QUIC implementation for rust)
+- Frontend: egui
+- Backend: tokio-rs
+- Networking: quinn (A QUIC implementation for rust)
