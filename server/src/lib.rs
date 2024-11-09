@@ -6,7 +6,7 @@ pub struct ServerState {
     pub canvas: Arc<DashMap<Vec<LinePos>, Brush>>,
 }
 
-use common_definitions::{Brush, CancellationToken, IndexMap, LinePos, Message, MessageType};
+use common_definitions::{Brush, CancellationToken, LinePos, Message, MessageType};
 use dashmap::DashMap;
 use quinn::{
     rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer},
@@ -76,6 +76,10 @@ pub fn spawn_client_listener(
     client_exclusive_sender: tokio::sync::mpsc::Sender<MessageType>,
     // This `CancellationToken` is used to cancel the listener thread if the sender thread panics / fails.
     client_shutdown_token: CancellationToken,
+
+    client_address: SocketAddr,
+
+    server_state: ServerState,
 ) {
     //Spawn thread
     tokio::spawn(async move {
@@ -90,6 +94,8 @@ pub fn spawn_client_listener(
         {
             //Shutdown both sender and listener
             client_shutdown_token.cancel();
+
+            server_state.client_list.remove(&client_address);
 
             //Display error
             println!("Client disconnected, shutting down thread: {err}");
@@ -163,19 +169,22 @@ pub fn spawn_client_sender(
     client_exclusive_reciver: tokio::sync::mpsc::Receiver<MessageType>,
     server_state: ServerState,
     client_shutdown_token: CancellationToken,
+    client_address: SocketAddr,
 ) {
     tokio::spawn(async move {
         if let Err(err) = relay_message(
             relay,
             send_stream,
             client_exclusive_reciver,
-            server_state,
+            server_state.clone(),
             client_shutdown_token.clone(),
         )
         .await
         {
             //Shutdown both sender and listener
             client_shutdown_token.cancel();
+
+            server_state.client_list.remove(&client_address);
 
             //Display error
             println!("Client disconnected, shutting down thread: {err}");
@@ -223,7 +232,7 @@ pub async fn relay_message(
                                 send_stream
                                     .write_all(&Message {
                                         uuid: Uuid::default(),
-                                        msg_type: MessageType::SyncLine(common_definitions::LineSyncType::Full(IndexMap::from_iter(
+                                        msg_type: MessageType::SyncLine(common_definitions::LineSyncType::Full(Vec::from_iter(
                                             server_state.canvas.iter().map(|line| {
                                                 (line.key().clone(), *line.value())
                                              })
@@ -235,6 +244,12 @@ pub async fn relay_message(
                             },
                         }
                     },
+
+                    MessageType::KeepAlive => {
+                        send_stream
+                                    .write_all(&Message {uuid: Uuid::default(), msg_type: MessageType::KeepAlive}.into_sendable())
+                                    .await?;
+                    }
 
                     _ => unreachable!(),
                 }

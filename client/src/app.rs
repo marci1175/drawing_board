@@ -30,52 +30,44 @@ impl ApplicationContext {
             BrushType::Graffiti | BrushType::Pencil | BrushType::Marker => {
                 if self.paintbrush.get_current_brush().1.a() != 0 {
                     if self.lines.is_empty() {
-                        self.lines.insert(
+                        self.lines.push((
                             vec![],
                             self.paintbrush
                                 .get_nth_brush(self.paintbrush.brush_type as usize),
-                        );
+                        ));
                     }
-                    let last_line_entry = self.lines.last().unwrap();
+
+                    let last_line_entry = self.lines.last_mut().unwrap();
                     if let Some(pointer_pos) = response.interact_pointer_pos() {
                         let on_canvas_pointer_pos = from_screen * pointer_pos;
-
                         if last_line_entry.0.last() != Some(&on_canvas_pointer_pos.into()) {
-                            let mut last_line_entry = self
-                                .lines
-                                .shift_remove_entry(self.lines.clone().last().unwrap().0)
-                                .unwrap();
-
                             last_line_entry.0.push(on_canvas_pointer_pos.into());
                             last_line_entry.1 = self
                                 .paintbrush
                                 .get_nth_brush(self.paintbrush.brush_type as usize);
 
-                            //Insert the modifed entry back into the IndexMap
-                            self.lines.insert(last_line_entry.0, last_line_entry.1);
-
                             response.mark_changed();
-
-                            if let Some(current_session) = &self.connection.current_session {
-                                let current_line = self.lines.last().unwrap();
-                                if let Err(err) = current_session.sender_to_server.try_send(
-                                    common_definitions::MessageType::AddLine((
-                                        current_line.0.to_vec(),
-                                        *current_line.1,
-                                    )),
-                                ) {
-                                    dbg!(err);
-
-                                    self.connection.current_session = None;
-                                }
-                            }
                         }
                     } else if !last_line_entry.0.is_empty() {
-                        self.lines.insert(
+                        if let Some(current_session) = &self.connection.current_session {
+                            let current_line = self.lines.last().unwrap();
+                            if let Err(err) = current_session.sender_to_server.try_send(
+                                common_definitions::MessageType::AddLine((
+                                    current_line.0.to_vec(),
+                                    current_line.1,
+                                )),
+                            ) {
+                                dbg!(err);
+
+                                self.connection.current_session = None;
+                            }
+                        }
+
+                        self.lines.push((
                             vec![],
                             self.paintbrush
                                 .get_nth_brush(self.paintbrush.brush_type as usize),
-                        );
+                        ));
 
                         if !self.undoer.is_in_flux() {
                             self.undoer.add_undo(&self.lines);
@@ -84,13 +76,6 @@ impl ApplicationContext {
                         response.mark_changed();
                     }
                 }
-
-                painter.extend(
-                    self.lines
-                        .iter()
-                        .filter(|line| line.0.len() >= 2)
-                        .map(|line| draw_line_to_screen_with_brush(line, to_screen)),
-                );
             }
             BrushType::Eraser => {
                 if let Some(pointer_pos) = response.interact_pointer_pos() {
@@ -108,7 +93,7 @@ impl ApplicationContext {
                             let rect = last_rect.union(current_rect);
 
                             if rect.contains(pointer_pos) {
-                                self.lines.shift_remove_index(line_idx);
+                                self.lines.swap_remove(line_idx);
 
                                 self.undoer.add_undo(&self.lines);
 
@@ -120,15 +105,46 @@ impl ApplicationContext {
                         }
                     }
                 }
-
-                painter.extend(
-                    self.lines
-                        .iter()
-                        .map(|line| draw_line_to_screen_with_brush(line, to_screen)),
-                );
             }
-            BrushType::None => {}
+            BrushType::None => {
+                for (line_pos, _) in self.lines.iter() {
+                    let line_rect = Rect::from_points(
+                        &line_pos
+                            .iter()
+                            .map(|pos| to_screen * Into::<Pos2>::into(*pos))
+                            .collect::<Vec<Pos2>>(),
+                    );
+
+                    if let Some(pointer_pos) = ui.ctx().pointer_hover_pos() {
+                        if line_rect.contains(pointer_pos) {
+                            ui.painter().rect(
+                                line_rect,
+                                1.,
+                                Color32::from_rgba_unmultiplied(0, 255, 0, 80),
+                                Stroke::new(2., Color32::GREEN),
+                            );
+
+                            //If It matched just continue with the for loop so that this line's rect wont get displayed twice
+                            continue;
+                        }
+                    }
+
+                    ui.painter().rect(
+                        line_rect,
+                        1.,
+                        Color32::TRANSPARENT,
+                        Stroke::new(1., Color32::WHITE),
+                    );
+                }
+            }
         }
+
+        painter.extend(
+            self.lines
+                .iter()
+                .filter(|line| line.0.len() >= 2)
+                .map(|line| draw_line_to_screen_with_brush(line, to_screen)),
+        );
 
         response
     }
@@ -146,7 +162,7 @@ impl ApplicationContext {
 
 /// This function draws a line ((Vec<LinePos>, Brush)) to the screen.
 fn draw_line_to_screen_with_brush(
-    line: (&Vec<LinePos>, &Brush),
+    line: &(Vec<LinePos>, Brush),
     to_screen: emath::RectTransform,
 ) -> egui::Shape {
     let points: Vec<Pos2> = line.0.iter().map(|p| to_screen * (*p).into()).collect();
@@ -155,11 +171,11 @@ fn draw_line_to_screen_with_brush(
     match brush_type {
         BrushType::Pencil => egui::Shape::Vec(egui::Shape::dashed_line(
             &points,
-            Stroke::new(*width, *color),
-            *width,
-            *width,
+            Stroke::new(width, color),
+            width,
+            width,
         )),
-        BrushType::Marker => egui::Shape::line(points, Stroke::new(*width, *color)),
+        BrushType::Marker => egui::Shape::line(points, Stroke::new(width, color)),
         BrushType::Graffiti => egui::Shape::Noop,
         BrushType::Eraser => egui::Shape::Noop,
         BrushType::None => egui::Shape::Noop,
@@ -251,22 +267,39 @@ impl TabViewer for ApplicationContext {
                 ui.separator();
 
                 //The `BrushType`-s which properties cannot be changed
-                if !matches!(self.paintbrush.get_current_brush().2, BrushType::None)
-                    && !matches!(self.paintbrush.get_current_brush().2, BrushType::Eraser)
-                {
-                    ui.horizontal(|ui| {
-                        ui.label("Color");
-                        self.color_picker(ui);
-                    });
+                match (
+                    matches!(self.paintbrush.get_current_brush().2, BrushType::None),
+                    matches!(self.paintbrush.get_current_brush().2, BrushType::Eraser),
+                ) {
+                    (false, true) => {
+                        ui.label("Width");
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.paintbrush.brush_width
+                                    [self.paintbrush.brush_type as usize],
+                                1.0..=100.0,
+                            )
+                            .step_by(0.2),
+                        );
+                    }
+                    (false, false) => {
+                        ui.horizontal(|ui| {
+                            ui.label("Color");
+                            self.color_picker(ui);
+                        });
 
-                    ui.label("Width");
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.paintbrush.brush_width[self.paintbrush.brush_type as usize],
-                            1.0..=100.0,
-                        )
-                        .step_by(0.2),
-                    );
+                        ui.label("Width");
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.paintbrush.brush_width
+                                    [self.paintbrush.brush_type as usize],
+                                1.0..=100.0,
+                            )
+                            .step_by(0.2),
+                        );
+                    }
+
+                    _ => (),
                 }
 
                 ui.separator();
@@ -563,7 +596,16 @@ impl eframe::App for Application {
                     //Acknowledge keepalive message
                     common_definitions::MessageType::KeepAlive => (),
                     common_definitions::MessageType::AddLine(line_data) => {
-                        self.context.lines.insert(line_data.0, line_data.1);
+                        if !self.context.lines.iter().any(|line| *line == line_data) {
+                            self.context.lines.push((line_data.0, line_data.1));
+
+                            self.context.lines.push((
+                                vec![],
+                                self.context
+                                    .paintbrush
+                                    .get_nth_brush(self.context.paintbrush.brush_type as usize),
+                            ));
+                        }
                     }
                     common_definitions::MessageType::ModifyLine((pos, props)) => {
                         if let Some(idx) = self
@@ -574,9 +616,9 @@ impl eframe::App for Application {
                             .position(|line| *line.0 == pos)
                         {
                             if let Some(line_modification) = props {
-                                self.context.lines[idx].1 = line_modification.1;
+                                self.context.lines[idx].1 = line_modification;
                             } else {
-                                self.context.lines.swap_remove_index(idx);
+                                self.context.lines.swap_remove(idx);
                             }
                         } else {
                             session
@@ -597,7 +639,7 @@ impl eframe::App for Application {
                             }
                             common_definitions::LineSyncType::Partial(line) => match line {
                                 Some(line) => {
-                                    self.context.lines.insert(line.0, line.1);
+                                    self.context.lines.push((line.0, line.1));
                                 }
                                 None => {
                                     eprintln!("Server/Client desync, another client requested the modification of a line that doesn't exist on the server's side.");

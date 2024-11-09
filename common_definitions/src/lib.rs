@@ -65,7 +65,7 @@ impl From<LinePos> for Pos2 {
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub enum LineSyncType {
-    Full(IndexMap<Vec<LinePos>, Brush>),
+    Full(Vec<(Vec<LinePos>, Brush)>),
     Partial(Option<(Vec<LinePos>, Brush)>),
 }
 

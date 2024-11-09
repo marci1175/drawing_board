@@ -151,6 +151,8 @@ async fn main() -> anyhow::Result<()> {
                                 canvas_sender.clone(),
                                 client_exclusive_sender,
                                 client_cancellation_token.clone(),
+                                client_address,
+                                server_state_clone.clone(),
                             );
 
                             //Spawn cleint relay thread
@@ -160,6 +162,7 @@ async fn main() -> anyhow::Result<()> {
                                 client_exclusive_listener,
                                 server_state_clone.clone(),
                                 client_cancellation_token,
+                                client_address,
                             );
                         }
                         Err(err) => {

@@ -2,7 +2,7 @@ pub const DRAWING_BOARD_IMAGE_EXT: &str = "dbimg";
 pub const DRAWING_BOARD_WORKSPACE_EXT: &str = "dbproject";
 use chrono::{Local, NaiveDate};
 use common_definitions::CancellationToken;
-use common_definitions::{Brush, IndexMap, PointerProperties};
+use common_definitions::{Brush, PointerProperties};
 use common_definitions::{BrushType, LinePos, Message, MessageType, TabType, BRUSH_TYPE_COUNT};
 use egui::{
     ahash::{HashSet, HashSetExt},
@@ -33,7 +33,7 @@ use tokio::{
 use uuid::Uuid;
 mod app;
 
-pub type BrushMap = IndexMap<Vec<LinePos>, Brush>;
+pub type BrushMap = Vec<(Vec<LinePos>, Brush)>;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct ApplicationContext {
@@ -328,7 +328,7 @@ pub async fn connect_to_server(
                                 Err(err) => {
                                     dbg!(err);
 
-                                    panic!();
+                                    break;
                                 },
                             }
                         }
