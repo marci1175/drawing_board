@@ -14,6 +14,7 @@ use tokio::sync::{
     broadcast::{self},
     mpsc::{self, channel},
 };
+use tracing::{event, Level};
 
 /* TODO:
     implement tracing / logging.
@@ -28,6 +29,10 @@ async fn main() -> anyhow::Result<()> {
     let addr = Ipv6Addr::LOCALHOST;
 
     let (server_config, _server_cert) = configure_server().unwrap();
+
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
 
     let endpoint = Endpoint::server(
         server_config,
@@ -74,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
                                     *line_props = props;
                                 } else {
-                                    eprintln!("Client/Server desync");
+                                    event!(Level::ERROR, "Client/Server desync");
                                 }
                             }
                             // The line gets deleted
@@ -89,6 +94,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    event!(Level::INFO, "Started canvas receiver.");
 
     //Spawn client registering thread
     tokio::spawn(async move {
@@ -105,9 +112,13 @@ async fn main() -> anyhow::Result<()> {
                     //Convert a list of bytes into a `Message`
                     match bytes_into_message(byte_buf) {
                         Ok(message) => {
+                            //Retrive UUID from message
                             let uuid = message.uuid;
+
+                            //Get inner message from message
                             let inner_message = message.msg_type;
 
+                            //Save the connecting user's credentials
                             if let MessageType::Connecting(username) = inner_message {
                                 username_uuid_pair_list.push((username, uuid));
                             }
@@ -126,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
                                 )
                                 .await
                             {
-                                eprintln!("Client unexpectededly disconnected: {err}");
+                                event!(Level::ERROR, "Client unexpectededly disconnected: {err}");
                             }
 
                             //Save client's send_stream and address
@@ -136,6 +147,8 @@ async fn main() -> anyhow::Result<()> {
                                     uuid: uuid.to_string(),
                                 },
                             );
+
+                            event!(Level::INFO, "Saved client credentials to: {client_address}");
 
                             //Create client exlusive channels these are used to send messages to the client who has created this set of channels exclusively
                             let (client_exclusive_sender, client_exclusive_listener) =
@@ -155,7 +168,9 @@ async fn main() -> anyhow::Result<()> {
                                 server_state_clone.clone(),
                             );
 
-                            //Spawn cleint relay thread
+                            event!(Level::INFO, "Started up client listener: {client_address}.");
+
+                            //Spawn client relay thread
                             spawn_client_sender(
                                 relay_reciver.resubscribe(),
                                 send_stream,
@@ -164,10 +179,15 @@ async fn main() -> anyhow::Result<()> {
                                 client_cancellation_token,
                                 client_address,
                             );
+
+                            event!(Level::INFO, "Started up client sender: {client_address}.");
                         }
                         Err(err) => {
-                            eprintln!("Received malformed input. Disconnecting client.");
-                            eprintln!("{err}");
+                            event!(
+                                Level::ERROR,
+                                "Received malformed input. Disconnecting client."
+                            );
+                            event!(Level::ERROR, "{err}");
 
                             client_list_clone.remove(&client_address);
                         }
@@ -176,6 +196,10 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    event!(Level::INFO, "Started client connection service handler.");
+
+    event!(Level::INFO, "Started global message listener.");
 
     //Handle incoming requests
     loop {
@@ -192,10 +216,22 @@ async fn main() -> anyhow::Result<()> {
 
             let connection = incoming_connection.await.unwrap();
 
-            dbg!(connection.remote_address());
+            event!(
+                Level::INFO,
+                "Inbound connection from: {}",
+                connection.remote_address()
+            );
 
+            //Accept connection from client
             let (sendstream, recvstream) = connection.accept_bi().await.unwrap();
 
+            event!(
+                Level::INFO,
+                "Accepted bi-directional connection from: {}",
+                connection.remote_address()
+            );
+
+            //Send connecting client to handler
             sx.send((sendstream, recvstream, connection.remote_address()))
                 .await
                 .unwrap();

@@ -24,3 +24,4 @@ console-subscriber = "0.4.1"
 uuid = {version = "1.11.0", features = ["serde", "v4"]}
 dashmap = "6.1.0"
 typed_floats = "1.0.2"
+tracing = "0.1.40"

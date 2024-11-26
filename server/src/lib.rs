@@ -17,6 +17,7 @@ use tokio::{
     select,
     sync::broadcast::{Receiver, Sender},
 };
+use tracing::{event, Level};
 use uuid::Uuid;
 
 pub struct Client {
@@ -89,6 +90,7 @@ pub fn spawn_client_listener(
             canvas_sender,
             client_exclusive_sender,
             client_shutdown_token.clone(),
+            client_address,
         )
         .await
         {
@@ -98,7 +100,10 @@ pub fn spawn_client_listener(
             server_state.client_list.remove(&client_address);
 
             //Display error
-            println!("Client disconnected, shutting down thread: {err}");
+            event!(
+                Level::INFO,
+                "Client disconnected, shutting down thread: {err}"
+            );
         }
     });
 }
@@ -110,8 +115,13 @@ pub async fn listen_for_message(
     canvas_sender: tokio::sync::mpsc::Sender<MessageType>,
     client_exclusive_sender: tokio::sync::mpsc::Sender<MessageType>,
     client_shutdown_token: CancellationToken,
+    client_address: SocketAddr,
 ) -> anyhow::Result<()> {
     loop {
+        event!(
+            Level::INFO,
+            "Listening for a message from: {client_address}."
+        );
         select! {
             message_buffer = read_from_stream(&mut recv_stream) => {
                 // Read the message bytes
@@ -151,11 +161,14 @@ pub async fn listen_for_message(
 
                         // This message can only be sent by the server. Client issue.
                         MessageType::SyncLine(_) => {
-                            println!("The client can't send this message");
+                            event!(Level::ERROR, "The client can't send this message");
                         }
                     }
             }
-            _ = client_shutdown_token.cancelled() => break,
+            _ = client_shutdown_token.cancelled() => {
+                event!(Level::INFO, "Shut down client: {client_address} listener.");
+                break
+            },
         }
     }
 
@@ -178,6 +191,7 @@ pub fn spawn_client_sender(
             client_exclusive_reciver,
             server_state.clone(),
             client_shutdown_token.clone(),
+            client_address,
         )
         .await
         {
@@ -187,7 +201,10 @@ pub fn spawn_client_sender(
             server_state.client_list.remove(&client_address);
 
             //Display error
-            println!("Client disconnected, shutting down thread: {err}");
+            event!(
+                Level::INFO,
+                "Client disconnected, shutting down thread: {err}"
+            );
         }
     });
 }
@@ -199,10 +216,13 @@ pub async fn relay_message(
     mut client_exclusive_reciver: tokio::sync::mpsc::Receiver<MessageType>,
     server_state: ServerState,
     client_shutdown_token: CancellationToken,
+    client_address: SocketAddr,
 ) -> anyhow::Result<()> {
     loop {
         select! {
             received_message = all_client_relay.recv() => {
+                event!(Level::INFO, "Received global client message from: {client_address}.");
+
                 let received_message = received_message?;
 
                 send_stream
@@ -211,6 +231,8 @@ pub async fn relay_message(
             }
 
             exclusive_message = client_exclusive_reciver.recv() => {
+                event!(Level::INFO, "Received client exclusive message from: {client_address}.");
+
                 let received_message = exclusive_message.ok_or(anyhow::Error::msg("Received an empty channel message."))?;
 
                 //Run custom server logic and respond accordingly
@@ -249,6 +271,7 @@ pub async fn relay_message(
                         send_stream
                                     .write_all(&Message {uuid: Uuid::default(), msg_type: MessageType::KeepAlive}.into_sendable())
                                     .await?;
+                        event!(Level::TRACE, "Sent KeepAlive message to: {client_address}.");
                     }
 
                     _ => unreachable!(),
@@ -257,6 +280,7 @@ pub async fn relay_message(
 
             _ = client_shutdown_token.cancelled() => break,
         }
+        event!(Level::INFO, "Relayed message to: {client_address}.");
     }
 
     Ok(())

@@ -14,3 +14,5 @@ serde_json = "1.0.132"
 uuid = {version = "1.11.0", features = ["serde", "v4"]}
 tokio = {version = "1.41.0", features = ["full"]}
 egui = "0.29.1"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
